@@ -1,0 +1,23 @@
+localpasskey (0.1.1) unstable; urgency=medium
+
+  * Fix: a "pick this authenticator" touch followed by a registration left
+    the approval armed, so a later sign-in to any site could be signed
+    without a confirmation dialog.
+  * Fix: a touch approval also survived a sign-in that found no passkey and
+    covered the following request.
+  * Fix: a transient accept() error (for example, a full file-descriptor
+    table) permanently stopped the control socket.
+  * Perf: sign-ins no longer rewrite the whole credential file with two
+    fsyncs just to bump "last used"; the timestamp is kept at the minute
+    resolution the CLI and window display.
+  * Perf: silent (user-presence-free) assertions no longer write the store,
+    and the CBOR decoder no longer allocates per item.
+  * 17 simplifications; unused code removed.
+
+ -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Sun, 11 Oct 2026 07:30:00 +0000
+
+localpasskey (0.1.0) unstable; urgency=medium
+
+  * Initial release.
+
+ -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Thu, 08 Oct 2026 05:41:00 +0000

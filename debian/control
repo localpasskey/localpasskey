@@ -1,0 +1,64 @@
+Source: localpasskey
+Section: utils
+Priority: optional
+Maintainer: LocalPasskey Maintainers <maintainers@localpasskey.invalid>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-python,
+ python3,
+ gir1.2-glib-2.0 <!nocheck>,
+ python3-cryptography <!nocheck>,
+ python3-fido2 <!nocheck>,
+ python3-gi <!nocheck>,
+ python3-pyqt6 <!nocheck>,
+ python3-qdarkstyle <!nocheck>,
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+X-Python3-Version: >= 3.9
+
+Package: localpasskey
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ gir1.2-glib-2.0,
+ polkitd | policykit-1,
+ python3-cryptography,
+ python3-gi,
+ udev,
+Recommends:
+ localpasskey-gui,
+ polkit-1-auth-agent,
+Suggests:
+ fido2-tools,
+Description: passkeys stored on this computer, like Windows Hello
+ LocalPasskey lets websites use this computer itself as a passkey
+ (FIDO2/WebAuthn) authenticator, the way Windows Hello does on Windows.
+ .
+ A system service creates a virtual USB security key that Firefox,
+ Chromium-based browsers and libfido2 tools use like any hardware key.
+ Passkeys are generated in software and kept per Linux user under
+ /var/lib/localpasskey, readable only by root and encrypted with a
+ machine-local key. No TPM, biometric sensor or hardware key is needed.
+ .
+ Every registration and sign-in has to be confirmed in a polkit
+ authentication dialog with the user's own password (or whatever else PAM
+ accepts, such as a fingerprint). Any number of accounts per site is
+ supported; browsers show an account chooser. The localpasskey command
+ lists and deletes stored passkeys.
+
+Package: localpasskey-gui
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ localpasskey (= ${binary:Version}),
+ python3-pyqt6,
+ python3-qdarkstyle,
+ qt6-svg-plugins,
+Description: window for browsing and removing LocalPasskey passkeys
+ A small Qt window, listed as LocalPasskey in the applications menu, that
+ shows the passkeys LocalPasskey keeps for you, in the QDarkStyle theme
+ known from Electrum and Feather Wallet. It can search them, show when each
+ one was created and last used, copy the username, open the website, and
+ delete a passkey after you confirm with your password.

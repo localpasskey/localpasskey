@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+
+# local agent tooling
+/.claude/
+
+# dpkg-buildpackage output
+/debian/.debhelper/
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper
+/debian/*.debhelper.log
+/debian/*.postinst.debhelper
+/debian/*.prerm.debhelper
+/debian/*.postrm.debhelper
+/debian/localpasskey/
+/debian/localpasskey-gui/
+/debian/debhelper-build-stamp
+
+# built packages
+/dist/

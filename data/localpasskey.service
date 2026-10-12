@@ -1,0 +1,43 @@
+[Unit]
+Description=LocalPasskey software FIDO2/WebAuthn authenticator
+Documentation=man:localpasskeyd(8)
+After=systemd-modules-load.service systemd-udevd.service dbus.socket systemd-logind.service
+
+[Service]
+Type=notify
+ExecStart=/usr/sbin/localpasskeyd
+Restart=on-failure
+RestartSec=2s
+StateDirectory=localpasskey
+StateDirectoryMode=0700
+RuntimeDirectory=localpasskey
+RuntimeDirectoryMode=0755
+UMask=0077
+
+# Needs /dev/uhid, /proc (to find the requesting process), the system bus, and
+# CAP_SETUID/CAP_SETGID to send desktop notifications as the user.
+DevicePolicy=closed
+DeviceAllow=/dev/uhid rw
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

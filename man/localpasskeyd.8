@@ -1,0 +1,103 @@
+.TH LOCALPASSKEYD 8 "October 2026" "localpasskey 0.1.1" "System Administration"
+.SH NAME
+localpasskeyd \- software FIDO2/WebAuthn authenticator that stores passkeys on this computer
+.SH SYNOPSIS
+.B localpasskeyd
+.RB [ \-\-config
+.IR file ]
+.RB [ \-\-state\-dir
+.IR directory ]
+.RB [ \-\-socket
+.IR path ]
+.RB [ \-\-debug ]
+.SH DESCRIPTION
+.B localpasskeyd
+turns the computer into a passkey authenticator, similar to Windows Hello.
+It is normally started by
+.BR systemd (1)
+as
+.BR localpasskey.service .
+.PP
+The daemon creates a virtual USB security key through
+.IR /dev/uhid .
+Browsers and
+.BR libfido2 (3)
+programs talk to it over the FIDO CTAP2 protocol exactly as they would to a
+hardware key. systemd's
+.B fido_id
+udev rules give the user of the active desktop session access to the
+device node.
+.PP
+For each request the daemon finds the process that opened the device and
+uses that user's passkeys. Before a passkey is created or used, a polkit
+authentication dialog appears in that user's session and asks for the
+user's own password (or anything else PAM accepts, such as a fingerprint).
+Browsers that ask for user verification receive it, because the
+authenticator advertises built-in user verification.
+.PP
+A user can have any number of passkeys, including several accounts for the
+same site; for sign-ins without a user name the browser shows an account
+chooser. Passkeys are device-bound: they are not synchronised or backed up
+anywhere.
+.SH OPTIONS
+.TP
+.BI \-\-config " file"
+Read the configuration from
+.I file
+instead of
+.IR /etc/localpasskey/localpasskeyd.conf .
+.TP
+.BI \-\-state\-dir " directory"
+Store passkeys in
+.IR directory .
+Defaults to
+.B $STATE_DIRECTORY
+or
+.IR /var/lib/localpasskey .
+.TP
+.BI \-\-socket " path"
+Listen for
+.BR localpasskey (1)
+on
+.IR path .
+Defaults to
+.IR control.sock
+in
+.B $RUNTIME_DIRECTORY
+or
+.IR /run/localpasskey .
+.TP
+.B \-\-debug
+Log debug messages, including the names of the sites involved.
+.SH FILES
+.TP
+.I /etc/localpasskey/localpasskeyd.conf
+Configuration: confirmation timeout, desktop notifications, log level and
+the USB IDs of the virtual device.
+.B notifications
+turns all desktop notifications on or off;
+.B activity_notifications
+controls the ones shown when a passkey is saved, used or deleted, as opposed
+to those about declined, timed-out or failed requests.
+.TP
+.I /var/lib/localpasskey/users/UID/credentials.json
+The passkeys of the user with that uid. Readable by root only; private keys
+are additionally encrypted with
+.IR /var/lib/localpasskey/master.key .
+Back up both files together, or neither.
+.TP
+.I /usr/share/polkit-1/actions/org.localpasskey.policy
+polkit actions
+.B org.localpasskey.authenticate
+(create or use a passkey) and
+.B org.localpasskey.manage
+(delete passkeys).
+.SH SECURITY
+Approving the dialog is the only thing that stops a website from using
+your passkeys, so do not grant
+.B org.localpasskey.authenticate
+without authentication in polkit rules.
+.SH SEE ALSO
+.BR localpasskey (1),
+.BR polkit (8),
+.BR systemd.exec (5)

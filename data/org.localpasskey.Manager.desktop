@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LocalPasskey
+GenericName=Passkey Manager
+Comment=See and remove the passkeys stored on this computer
+Exec=localpasskey-gui
+Icon=org.localpasskey.Manager
+Terminal=false
+Categories=Qt;Utility;
+Keywords=passkey;passkeys;WebAuthn;FIDO2;security key;login;
+StartupNotify=true
+StartupWMClass=LocalPasskey

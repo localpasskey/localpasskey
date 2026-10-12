@@ -1,0 +1,41 @@
+.TH LOCALPASSKEY-GUI 1 "October 2026" "localpasskey 0.1.1" "User Commands"
+.SH NAME
+localpasskey-gui \- window for browsing and removing the passkeys stored on this computer
+.SH SYNOPSIS
+.B localpasskey-gui
+.SH DESCRIPTION
+.B localpasskey-gui
+opens a window listing the passkeys that
+.BR localpasskeyd (8)
+keeps for you, one per website account, in the QDarkStyle Qt theme also used
+by Electrum and Feather Wallet. It is in the applications menu as
+.BR LocalPasskey .
+.PP
+Selecting a passkey shows its website, account, whether it is a passkey
+(signs you in without a username) or a security key (a second step after your
+password), and when it was created and last used. From there, the Passkey menu
+or a right-click, you can copy the username, open the website, or delete the
+passkey. Deleting asks for confirmation, and then for your password. Remove the
+passkey from your account settings on the website as well.
+.PP
+The list follows the service: passkeys you create in a browser appear within
+a few seconds.
+.SH KEYBOARD SHORTCUTS
+.TP
+Ctrl+F
+Search by website or account; Escape clears the search.
+.TP
+Ctrl+C
+Copy the username of the selected passkey.
+.TP
+Delete
+Delete the selected passkey.
+.TP
+F5
+Refresh the list.
+.TP
+Ctrl+Q
+Quit.
+.SH SEE ALSO
+.BR localpasskey (1),
+.BR localpasskeyd (8)

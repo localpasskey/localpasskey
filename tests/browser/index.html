@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LocalPasskey browser test</title>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 2em; }
+  button { font-size: 1em; margin-right: .5em; }
+  #log { white-space: pre-wrap; background: #f4f4f4; padding: 1em; margin-top: 1em; }
+</style>
+<h1>LocalPasskey browser test</h1>
+<p>Creates passkeys for <code>localhost</code> and signs in with them.</p>
+<input id="name" value="alice@localhost" size="24">
+<button id="register">Create passkey</button>
+<button id="signin">Sign in with a passkey</button>
+<div id="log"></div>
+<script>
+const log = (msg) => {
+  document.getElementById("log").textContent += msg + "\n";
+  fetch("/log", { method: "POST", body: msg });
+};
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)))
+  .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const text = (buf) => new TextDecoder().decode(buf);
+
+async function register() {
+  const name = document.getElementById("name").value;
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      rp: { id: "localhost", name: "LocalPasskey test" },
+      user: { id: new TextEncoder().encode(name), name, displayName: name.split("@")[0] },
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { residentKey: "required", userVerification: "required" },
+      extensions: { credProps: true },
+      timeout: 120000,
+    }});
+    const authData = new Uint8Array(cred.response.getAuthenticatorData());
+    const flags = authData[32];
+    const aaguid = [...authData.slice(37, 53)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    log(`REGISTERED ${name} id=${cred.id.slice(0, 16)} flags=0x${flags.toString(16)} aaguid=${aaguid} ` +
+        `rk=${cred.getClientExtensionResults().credProps?.rk} ` +
+        `alg=${cred.response.getPublicKeyAlgorithm()} transports=${cred.response.getTransports()}`);
+  } catch (e) {
+    log(`REGISTER FAILED ${e.name}: ${e.message}`);
+  }
+}
+
+async function signin(allowCredentials = []) {
+  try {
+    const cred = await navigator.credentials.get({ publicKey: {
+      rpId: "localhost",
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials,
+      userVerification: "required",
+      timeout: 120000,
+    }});
+    const flags = new Uint8Array(cred.response.authenticatorData)[32];
+    const counter = new DataView(cred.response.authenticatorData).getUint32(33);
+    log(`SIGNED IN as ${text(cred.response.userHandle)} id=${cred.id.slice(0, 16)} ` +
+        `flags=0x${flags.toString(16)} counter=${counter}`);
+  } catch (e) {
+    log(`SIGN-IN FAILED ${e.name}: ${e.message}`);
+  }
+}
+
+document.getElementById("register").onclick = register;
+document.getElementById("signin").onclick = signin;
+const steps = new URLSearchParams(location.search).get("auto");
+if (steps) {
+  (async () => {
+    for (const step of steps.split(",")) {
+      if (step === "signin") await signin();
+      else if (step === "unknown") {
+        // A credential this computer doesn't have, as if it were on another key.
+        await signin([{ type: "public-key", id: crypto.getRandomValues(new Uint8Array(64)) }]);
+      } else { document.getElementById("name").value = step; await register(); }
+    }
+    log("DONE");
+  })();
+}
+</script>

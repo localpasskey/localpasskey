@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  localpasskeyd replaces the message below with one naming the site and
+  account. Keep the defaults at auth_self: a passkey must never be usable
+  without the user confirming it (allow_active=yes would let any website use
+  your passkeys silently).
+-->
+<policyconfig>
+  <vendor>LocalPasskey</vendor>
+  <icon_name>dialog-password</icon_name>
+
+  <action id="org.localpasskey.authenticate">
+    <description>Use a passkey stored on this computer</description>
+    <message>Authentication is required to use a passkey stored on this computer</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.localpasskey.manage">
+    <description>Delete passkeys stored on this computer</description>
+    <message>Authentication is required to delete passkeys stored on this computer</message>
+    <defaults>
+      <allow_any>auth_self</allow_any>
+      <allow_inactive>auth_self</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

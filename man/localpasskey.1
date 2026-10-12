@@ -1,0 +1,62 @@
+.TH LOCALPASSKEY 1 "October 2026" "localpasskey 0.1.1" "User Commands"
+.SH NAME
+localpasskey \- list and delete the passkeys stored on this computer
+.SH SYNOPSIS
+.B localpasskey list
+.RB [ \-\-json ]
+.RB [ \-\-user
+.IR user ]
+.br
+.B localpasskey delete
+.RI [ ID ...]
+.RB [ \-\-site
+.IR site ]
+.RB [ \-\-all ]
+.RB [ \-\-user
+.IR user ]
+.RB [ \-y ]
+.br
+.B localpasskey status
+.SH DESCRIPTION
+.B localpasskey
+talks to
+.BR localpasskeyd (8),
+which keeps passkeys for websites on this computer. Every user only sees
+and manages their own passkeys; root can act on any user's with
+.BR \-\-user .
+.SH COMMANDS
+.TP
+.B list
+Show your passkeys: an ID, the site, the account, whether it is a
+.I passkey
+(usable without typing a user name) or a
+.I security key
+(a second factor the site asks for by ID), and when it was created and last
+used.
+.B \-\-json
+prints all details.
+.TP
+.B delete
+Delete the passkeys given by
+.I ID
+(or any unique prefix of at least four characters), all passkeys for
+.BR \-\-site ,
+or
+.B \-\-all
+of them. The command shows what will be deleted and asks for
+confirmation (skip with
+.BR \-y ),
+then polkit asks for your password. Deleting a passkey here does not remove
+it from the website's account settings.
+.TP
+.B status
+Check that the service is running and show the virtual device node.
+.SH EXAMPLES
+.nf
+$ localpasskey list
+ID            SITE        ACCOUNT                    TYPE     CREATED           LAST USED
+3f9a1c2d55e0  github.com  octocat                    passkey  2026-10-08 06:31  2026-10-08 06:40
+$ localpasskey delete 3f9a
+.fi
+.SH SEE ALSO
+.BR localpasskeyd (8)

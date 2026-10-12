@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with python3
+
+override_dh_auto_install:
+	$(MAKE) install-service DESTDIR=$(CURDIR)/debian/localpasskey
+	$(MAKE) install-gui DESTDIR=$(CURDIR)/debian/localpasskey-gui
+
+override_dh_python3:
+	dh_python3 -plocalpasskey /usr/share/localpasskey
+	dh_python3 -plocalpasskey-gui /usr/share/localpasskey
