@@ -1,4 +1,4 @@
-.TH LOCALPASSKEYD 8 "October 2026" "localpasskey 0.1.1" "System Administration"
+.TH LOCALPASSKEYD 8 "October 2026" "localpasskey 0.2.0" "System Administration"
 .SH NAME
 localpasskeyd \- software FIDO2/WebAuthn authenticator that stores passkeys on this computer
 .SH SYNOPSIS
@@ -34,6 +34,14 @@ authentication dialog appears in that user's session and asks for the
 user's own password (or anything else PAM accepts, such as a fingerprint).
 Browsers that ask for user verification receive it, because the
 authenticator advertises built-in user verification.
+.PP
+Browsers can also list and delete passkeys from their security-key settings
+(CTAP credential management) once the user has set a PIN. The PIN alone is
+not enough: the polkit dialog appears before a browser may manage passkeys,
+and a passkey deleted this way goes to the trash, from which
+.BR localpasskey (1)
+can restore it. Eight wrong PINs in a row block the PIN, three in a row
+block further attempts until the service restarts.
 .PP
 A user can have any number of passkeys, including several accounts for the
 same site; for sign-ins without a user name the browser shows an account
@@ -77,21 +85,27 @@ the USB IDs of the virtual device.
 .B notifications
 turns all desktop notifications on or off;
 .B activity_notifications
-controls the ones shown when a passkey is saved, used or deleted, as opposed
+controls the ones shown when a passkey is saved, used, moved to the trash or
+permanently deleted, as opposed
 to those about declined, timed-out or failed requests.
 .TP
 .I /var/lib/localpasskey/users/UID/credentials.json
-The passkeys of the user with that uid. Readable by root only; private keys
-are additionally encrypted with
+The passkeys of the user with that uid, including those in the trash.
+Readable by root only; private keys are additionally encrypted with
 .IR /var/lib/localpasskey/master.key .
 Back up both files together, or neither.
+.TP
+.I /var/lib/localpasskey/users/UID/pin.json
+A hash of that user's PIN, encrypted with the same master key, and the
+number of attempts left. Present only while a PIN is set.
 .TP
 .I /usr/share/polkit-1/actions/org.localpasskey.policy
 polkit actions
 .B org.localpasskey.authenticate
 (create or use a passkey) and
 .B org.localpasskey.manage
-(delete passkeys).
+(move passkeys to the trash, restore or permanently delete them, and set
+or remove the PIN).
 .SH SECURITY
 Approving the dialog is the only thing that stops a website from using
 your passkeys, so do not grant

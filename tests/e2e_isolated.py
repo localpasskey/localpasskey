@@ -72,12 +72,20 @@ def client_main(stage, root, device_path):
 
     assert device_path in cli("status")
     if stage == "delete":
-        assert "Deleted 2 passkeys." in cli("delete", "--site", "example.com", "--yes")
+        assert "Moved 2 passkeys to the trash." in cli("delete", "--site", "example.com", "--yes")
         remaining = json.loads(cli("list", "--json"))
         assert [c["site"] for c in remaining] == ["other.example.org"]
-        assert "Deleted 1 passkey." in cli("delete", "--all", "--yes")
+        trashed = json.loads(cli("list", "--trash", "--json"))
+        assert [c["site"] for c in trashed] == ["example.com", "example.com"]
+        assert all(c["deleted"] for c in trashed)
+        assert "Restored 2 passkeys." in cli("restore", "--site", "example.com", "--yes")
+        assert len(json.loads(cli("list", "--json"))) == 3
+        assert cli("list", "--trash").strip() == "The trash is empty."
+        assert "Moved 1 passkey to the trash." in cli("delete", "--all", "--yes")
         assert json.loads(cli("list", "--json")) == []
-        print("CLI status/list/delete: OK")
+        assert "Restored 1 passkey." in cli("restore", "--all", "--yes")
+        assert len(json.loads(cli("list", "--json"))) == 3
+        print("CLI status/list/delete/trash/restore: OK")
         return
 
     deadline = time.monotonic() + 5

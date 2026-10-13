@@ -2,8 +2,9 @@
 
 Each connection carries one JSON request and one JSON reply, one line each.
 The kernel tells us the caller's uid (SO_PEERCRED), so users can only see and
-delete their own passkeys; root may pass ``"user"`` to manage anyone's.
-Deleting asks the caller to authenticate through polkit first.
+manage their own passkeys; root may pass ``"user"`` to manage anyone's.
+Deleting moves passkeys to the trash; restoring, purging and the PIN ask the
+caller to authenticate through polkit first.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import time
 from types import SimpleNamespace
 
 from . import cose
+from .clientpin import MAX_PIN_BYTES, MIN_PIN_LENGTH, PIN_POLICY_VIOLATION, PinError, PinManager
 from .ctap2 import Verdict, _label
 from .notify import ACTIVITY
 from .polkit import ACTION_MANAGE, process_subject
@@ -46,16 +48,18 @@ def describe(cred) -> dict:
         "discoverable": cred.discoverable,
         "created": cred.created,
         "last_used": cred.last_used,
+        "deleted": cred.deleted,
     }
 
 
 class ControlServer:
-    def __init__(self, path, store, verifier, status, notifier=None):
+    def __init__(self, path, store, verifier, status, notifier=None, pins=None):
         self.path = path
         self.store = store
         self.verifier = verifier
         self.status = status
         self.notifier = notifier
+        self.pins = pins or PinManager(store)
         self._sock = None
 
     def start(self):
@@ -123,44 +127,120 @@ class ControlServer:
         command = request.get("command")
         if command == "status":
             return {"ok": True, **self.status()}
-        if command not in ("list", "delete"):
+        if command not in ("list", "delete", "restore", "purge", "pin"):
             raise ControlError(f"unknown command {command!r}")
         target_uid, username = self._target(request.get("user"), uid)
-        creds = self.store.credentials(target_uid, username)
+        if command == "pin":
+            return self._pin(request, pid, uid, target_uid, username)
+
         if command == "list":
-            return {"ok": True, "user": username, "credentials": [describe(c) for c in creds]}
-        doomed = self._select(request, creds)
+            if "trash" in request and not isinstance(request["trash"], bool):
+                raise ControlError("invalid trash selector")
+            if request.get("trash"):
+                records = self.store.trash(target_uid, username)
+            else:
+                records = self.store.credentials(target_uid, username)
+            return {"ok": True, "user": username, "credentials": [describe(c) for c in records]}
+
+        # delete looks at the live records, restore and purge at the trash.
+        if command == "delete":
+            records = self.store.credentials(target_uid, username)
+        else:
+            records = self.store.trash(target_uid, username)
+        doomed = self._select(request, records)
+        if command == "purge" and len(doomed) != 1:
+            raise ControlError("purge permanently deletes one passkey at a time")
         if request.get("dry_run"):
             return {"ok": True, "deleted": [describe(c) for c in doomed]}
-        if uid != 0:
-            count = len(doomed)
+        count = len(doomed)
+        plural = "s" if count != 1 else ""
+        if command == "delete":
             message = (
-                f"Delete {count} passkey{'s' if count != 1 else ''} stored on this computer? "
-                "You may no longer be able to sign in with them."
+                f"Move {count} passkey{plural} stored on this computer to the trash? "
+                "They stop working until you restore them."
             )
-            verdict = self.verifier.check(process_subject(pid, uid), ACTION_MANAGE, message)
-            if verdict is not Verdict.APPROVED:
-                raise ControlError(f"not deleted: authentication {verdict.value}")
-        # Another request may have deleted some of them during the dialog.
-        deleted = self.store.remove(target_uid, username, (c.id for c in doomed))
-        log.info("Deleted %d passkey(s) of uid %d at the request of uid %d", len(deleted), target_uid, uid)
-        self._notify_deleted(target_uid, deleted, uid)
-        return {"ok": True, "deleted": [describe(c) for c in deleted]}
+        elif command == "restore":
+            message = f"Restore {count} passkey{plural} from the trash?"
+        else:
+            message = (
+                f"Permanently delete the passkey for {_label(doomed[0].rp_id)}? "
+                "This cannot be undone."
+            )
+        self._approve(pid, uid, message, f"not {command}d")
+        # Another request may have changed things during the dialog.
+        if command == "delete":
+            moved = self.store.remove(target_uid, username, (c.id for c in doomed))
+            log.info("Moved %d passkey(s) of uid %d to the trash at the request of uid %d",
+                     len(moved), target_uid, uid)
+            self._notify_deleted(target_uid, moved, uid, "moved to the trash")
+            return {"ok": True, "deleted": [describe(c) for c in moved]}
+        if command == "restore":
+            restored = self.store.restore(target_uid, username, (c.id for c in doomed))
+            log.info("Restored %d passkey(s) of uid %d at the request of uid %d",
+                     len(restored), target_uid, uid)
+            return {"ok": True, "restored": [describe(c) for c in restored]}
+        purged = self.store.purge(target_uid, username, (c.id for c in doomed))
+        log.info("Permanently deleted %d passkey(s) of uid %d at the request of uid %d",
+                 len(purged), target_uid, uid)
+        self._notify_deleted(target_uid, purged, uid, "permanently deleted")
+        return {"ok": True, "purged": [describe(c) for c in purged]}
 
-    def _notify_deleted(self, target_uid, doomed, caller_uid):
+    def _pin(self, request, pid, uid, target_uid, username):
+        action = request.get("action")
+        if action not in ("status", "set", "remove"):
+            raise ControlError(f"unknown PIN action {action!r}")
+        if action == "status":
+            return {
+                "ok": True,
+                "user": username,
+                "set": self.pins.is_set(target_uid, username),
+                "retries": self.pins.retries(target_uid, username),
+            }
+        if action == "set":
+            pin = request.get("pin")
+            if not isinstance(pin, str):
+                raise ControlError("the PIN must be a string")
+            message = "Set a new PIN for the passkeys stored on this computer?"
+        else:
+            message = "Remove the PIN for the passkeys stored on this computer?"
+        self._approve(pid, uid, message, f"not {action}")
+        try:
+            if action == "set":
+                self.pins.set(target_uid, username, pin.encode())
+            else:
+                self.pins.remove(target_uid, username)
+        except PinError as e:
+            if e.code == PIN_POLICY_VIOLATION:
+                raise ControlError(
+                    f"the PIN must be at least {MIN_PIN_LENGTH} characters and at most "
+                    f"{MAX_PIN_BYTES} bytes long, and must not contain NUL"
+                ) from None
+            raise ControlError(str(e)) from None
+        log.info("%s the PIN of uid %d at the request of uid %d",
+                 "Set" if action == "set" else "Removed", target_uid, uid)
+        return {"ok": True}
+
+    def _approve(self, pid, uid, message, refusal):
+        if uid == 0:
+            return
+        verdict = self.verifier.check(process_subject(pid, uid), ACTION_MANAGE, message)
+        if verdict is not Verdict.APPROVED:
+            raise ControlError(f"{refusal}: authentication {verdict.value}")
+
+    def _notify_deleted(self, target_uid, doomed, caller_uid, what):
         if self.notifier is None or not doomed:
             return
         if len(doomed) == 1:
-            what = f"The passkey for {_label(doomed[0].rp_id)} was"
+            subject = f"The passkey for {_label(doomed[0].rp_id)} was"
         else:
             sites = sorted({_label(c.rp_id) for c in doomed})
-            what = f"{len(doomed)} passkeys for {', '.join(sites[:3])}{', …' if len(sites) > 3 else ''} were"
+            subject = f"{len(doomed)} passkeys for {', '.join(sites[:3])}{', …' if len(sites) > 3 else ''} were"
         by = " by the administrator" if caller_uid != target_uid else ""
         try:
             self.notifier.notify(
                 SimpleNamespace(uid=target_uid),
-                "Passkey deleted" if len(doomed) == 1 else "Passkeys deleted",
-                f"{what} deleted from this computer{by}.",
+                f"Passkey{'' if len(doomed) == 1 else 's'} {what}",
+                f"{subject} {what} from this computer{by}.",
                 ACTIVITY,
             )
         except Exception:

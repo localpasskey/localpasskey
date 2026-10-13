@@ -1,6 +1,6 @@
-.TH LOCALPASSKEY-GUI 1 "October 2026" "localpasskey 0.1.1" "User Commands"
+.TH LOCALPASSKEY-GUI 1 "October 2026" "localpasskey 0.2.0" "User Commands"
 .SH NAME
-localpasskey-gui \- window for browsing and removing the passkeys stored on this computer
+localpasskey-gui \- window for browsing, restoring and removing the passkeys stored on this computer
 .SH SYNOPSIS
 .B localpasskey-gui
 .SH DESCRIPTION
@@ -13,29 +13,63 @@ by Electrum and Feather Wallet. It is in the applications menu as
 .PP
 Selecting a passkey shows its website, account, whether it is a passkey
 (signs you in without a username) or a security key (a second step after your
-password), and when it was created and last used. From there, the Passkey menu
-or a right-click, you can copy the username, open the website, or delete the
-passkey. Deleting asks for confirmation, and then for your password. Remove the
-passkey from your account settings on the website as well.
+password), its key algorithm, and when it was created and last used. From
+there, the Passkey menu or a right-click, you can copy the username, open the
+website, or move the passkey to the trash. Moving to the trash asks for
+confirmation, and then for your password.
 .PP
-The list follows the service: passkeys you create in a browser appear within
-a few seconds.
+A passkey in the trash stops working but is not destroyed. Besides
+.B Move to Trash\[u2026]
+for the selected passkey, the Passkey menu has
+.B Move All for This Website to Trash\[u2026]
+and
+.BR "Move All Passkeys to Trash\[u2026]" .
+.B Show Trash
+in the View menu switches the list to the trash, where the third column shows
+when each passkey was moved there, and the window offers
+.BR Restore ,
+.B Restore All for This Website
+and
+.BR "Restore All" .
+Bulk actions say how many passkeys they affect and ask before they act.
+Nothing in the trash expires.
+.B Delete Permanently\[u2026]
+removes one passkey for good: type the site name to enable its button.
+This cannot be undone. Remove passkeys from your account settings on the
+website as well.
+.SH THE PIN
+Browsers ask for a PIN in their security-key settings before they list or
+delete the passkeys of a security key.
+.B Security Key PIN\[u2026]
+in the File menu shows whether a PIN is set and how many attempts are left,
+and sets a new one or removes the existing one. Only a hash of the PIN is
+stored, and the PIN alone never deletes a passkey: everything the window
+changes still asks for your password. The command-line equivalent is
+.B localpasskey pin
+in
+.BR localpasskey (1).
 .SH KEYBOARD SHORTCUTS
 .TP
 Ctrl+F
 Search by website or account; Escape clears the search.
 .TP
+Ctrl+T
+Show or hide the trash.
+.TP
 Ctrl+C
 Copy the username of the selected passkey.
 .TP
 Delete
-Delete the selected passkey.
+Move the selected passkey to the trash.
 .TP
 F5
 Refresh the list.
 .TP
 Ctrl+Q
 Quit.
+.PP
+The list follows the service: passkeys you create in a browser appear within
+a few seconds.
 .SH SEE ALSO
 .BR localpasskey (1),
 .BR localpasskeyd (8)

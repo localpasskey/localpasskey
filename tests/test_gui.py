@@ -59,6 +59,12 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(ordered, [("github.com", "amy"), ("github.com", "zed"),
                                    ("login.microsoft.com", "a"), ("proton.me", "a")])
 
+    def test_trash_rows_show_and_sort_by_the_deletion_time(self):
+        cred = {"id": "a", "site": "github.com", "user_name": "a", "last_used": None, "deleted": 20.0}
+        self.assertEqual(gui.passkey_row(cred)[2].data(gui.SORT_ROLE), 0.0)
+        self.assertEqual(gui.passkey_row(cred, trashed=True)[2].data(gui.SORT_ROLE), 20.0)
+        self.assertEqual(gui.passkey_row(cred, trashed=True)[2].text(), gui.when(20.0))
+
     def test_first_visible_row_follows_display_order(self):
         model = QStandardItemModel(0, len(gui.COLUMNS))
         for site, user, used in (("proton.me", "a", 30.0), ("github.com", "zed", 10.0), ("github.com", "amy", 20.0)):

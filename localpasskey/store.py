@@ -22,7 +22,11 @@ from typing import Iterable, List, Optional
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-FORMAT_VERSION = 1
+# Format 2 added the "deleted" key. Reading 1 keeps existing files working,
+# while writing only 2 makes a 0.1.1 daemon refuse the file instead of loading
+# trashed passkeys as live and dropping the key on its next write.
+FORMAT_VERSION = 2
+PIN_FORMAT_VERSION = 1
 MAX_CREDENTIALS_PER_USER = 4096
 _NONCE_SIZE = 12
 LAST_USED_RESOLUTION = 60.0  # readers show last_used at minute resolution
@@ -58,6 +62,7 @@ class Credential:
     cred_protect: int = 1
     created: float = 0.0
     last_used: Optional[float] = None
+    deleted: Optional[float] = None
 
     def to_json(self) -> dict:
         return {
@@ -73,10 +78,15 @@ class Credential:
             "cred_protect": self.cred_protect,
             "created": self.created,
             "last_used": self.last_used,
+            "deleted": self.deleted,
         }
 
     @classmethod
     def from_json(cls, data: dict) -> "Credential":
+        deleted = data.get("deleted")
+        if deleted is not None and (isinstance(deleted, bool) or not isinstance(deleted, (int, float))):
+            # Fail closed: a corrupt timestamp must not turn a trashed passkey live.
+            raise ValueError(f"invalid deleted timestamp {deleted!r}")
         return cls(
             id=b64decode(data["id"]),
             rp_id=data["rp_id"],
@@ -90,7 +100,14 @@ class Credential:
             cred_protect=int(data.get("cred_protect", 1)),
             created=float(data.get("created", 0.0)),
             last_used=data.get("last_used"),
+            deleted=None if deleted is None else float(deleted),
         )
+
+
+@dataclass
+class PinState:
+    hash: bytes  # LEFT(SHA-256(PIN), 16)
+    retries: int
 
 
 def _fsync_dir(path: Path) -> None:
@@ -148,11 +165,17 @@ class CredentialStore:
         nonce = os.urandom(_NONCE_SIZE)
         return nonce + self._aead.encrypt(nonce, secret, self._aad(uid, cred_id))
 
-    def unseal(self, uid: int, cred: Credential) -> bytes:
-        nonce, ciphertext = cred.sealed_key[:_NONCE_SIZE], cred.sealed_key[_NONCE_SIZE:]
+    def _open(self, uid: int, label: bytes, blob: bytes) -> bytes:
+        nonce, ciphertext = blob[:_NONCE_SIZE], blob[_NONCE_SIZE:]
         try:
-            return self._aead.decrypt(nonce, ciphertext, self._aad(uid, cred.id))
+            return self._aead.decrypt(nonce, ciphertext, self._aad(uid, label))
         except (InvalidTag, ValueError):
+            raise StoreError(f"{label.hex()[:12]} (uid {uid}) cannot be decrypted") from None
+
+    def unseal(self, uid: int, cred: Credential) -> bytes:
+        try:
+            return self._open(uid, cred.id, cred.sealed_key)
+        except StoreError:
             raise StoreError(
                 f"private key of credential {cred.id.hex()[:12]} (uid {uid}) cannot be "
                 "decrypted; was master.key replaced?"
@@ -161,7 +184,11 @@ class CredentialStore:
     def _path(self, uid: int) -> Path:
         return self.state_dir / "users" / str(uid) / "credentials.json"
 
+    def _pin_path(self, uid: int) -> Path:
+        return self.state_dir / "users" / str(uid) / "pin.json"
+
     def _read(self, uid: int, username: str) -> List[Credential]:
+        """Every record in the file, trashed ones included."""
         path = self._path(uid)
         try:
             doc = json.loads(path.read_bytes())
@@ -169,11 +196,11 @@ class CredentialStore:
             return []
         except ValueError as e:
             raise StoreError(f"{path} is not valid JSON: {e}") from None
-        if not isinstance(doc, dict) or doc.get("format") != FORMAT_VERSION or doc.get("uid") != uid:
+        if not isinstance(doc, dict) or doc.get("format") not in (1, FORMAT_VERSION) or doc.get("uid") != uid:
             raise StoreError(f"{path} has an unexpected format or uid")
         if doc.get("user") != username:
             raise StoreError(
-                f"{path} belongs to user {doc.get('user')!r}, not {username!r}. The uid "
+                f"{path} belongs to user {doc.get('user')!r}, not {username!r}. The uid"
                 "was reused or the account renamed; move the file away or correct "
                 'its "user" field.'
             )
@@ -182,10 +209,11 @@ class CredentialStore:
             raise StoreError(f"{path} has no valid credentials list")
         try:
             return [Credential.from_json(c) for c in creds]
-        except (KeyError, TypeError, ValueError) as e:
+        except (KeyError, TypeError, ValueError, OverflowError) as e:
             raise StoreError(f"{path} contains a malformed credential: {e}") from None
 
     def _write(self, uid: int, username: str, creds: List[Credential]) -> None:
+        """Persist ``creds`` whole; trashed records are only dropped by purge."""
         path = self._path(uid)
         _make_private_dir(path.parent.parent)
         _make_private_dir(path.parent)
@@ -198,11 +226,23 @@ class CredentialStore:
         _write_file(path, json.dumps(doc, indent=1).encode() + b"\n")
 
     def credentials(self, uid: int, username: str) -> List[Credential]:
+        """The LIVE credentials of a user; the trash is hidden here."""
         with self._lock:
-            return self._read(uid, username)
+            return [c for c in self._read(uid, username) if c.deleted is None]
+
+    def trash(self, uid: int, username: str) -> List[Credential]:
+        """The trashed credentials of a user."""
+        with self._lock:
+            return [c for c in self._read(uid, username) if c.deleted is not None]
+
+    def _matching(self, creds: List[Credential], cred_ids, trashed: bool) -> List[Credential]:
+        wanted = set(cred_ids)
+        return [
+            c for c in creds if c.id in wanted and (c.deleted is not None) == trashed
+        ]
 
     def add(self, uid: int, username: str, cred: Credential) -> None:
-        """Store ``cred``; a discoverable credential replaces any older
+        """Store ``cred``; a discoverable credential replaces any older live
         discoverable one for the same site and account, as CTAP requires."""
         with self._lock:
             creds = self._read(uid, username)
@@ -210,7 +250,12 @@ class CredentialStore:
                 creds = [
                     c
                     for c in creds
-                    if not (c.discoverable and c.rp_id == cred.rp_id and c.user_id == cred.user_id)
+                    if not (
+                        c.discoverable
+                        and c.deleted is None
+                        and c.rp_id == cred.rp_id
+                        and c.user_id == cred.user_id
+                    )
                 ]
             if len(creds) >= MAX_CREDENTIALS_PER_USER:
                 raise StoreFull(f"uid {uid} already has {len(creds)} credentials")
@@ -218,12 +263,12 @@ class CredentialStore:
             self._write(uid, username, creds)
 
     def record_use(self, uid: int, username: str, cred_id: bytes) -> None:
-        """Remember when a credential was last used."""
+        """Remember when a live credential was last used."""
         with self._lock:
             creds = self._read(uid, username)
             now = time.time()
             for cred in creds:
-                if cred.id == cred_id:
+                if cred.id == cred_id and cred.deleted is None:
                     # Timestamps are only shown to the minute; skip the two-fsync
                     # rewrite while the stored value is still current enough.
                     if cred.last_used is not None and 0 <= now - cred.last_used < LAST_USED_RESOLUTION:
@@ -234,11 +279,109 @@ class CredentialStore:
             raise KeyError(cred_id)
 
     def remove(self, uid: int, username: str, cred_ids: Iterable[bytes]) -> List[Credential]:
-        """Delete the given credentials and return those that were still there."""
+        """Move the given live credentials to the trash and return them."""
         doomed = set(cred_ids)
         with self._lock:
             creds = self._read(uid, username)
-            kept = [c for c in creds if c.id not in doomed]
-            if len(kept) != len(creds):
+            moved = self._matching(creds, doomed, trashed=False)
+            for cred in moved:
+                cred.deleted = time.time()
+            if moved:
+                self._write(uid, username, creds)
+            return moved
+
+    def restore(self, uid: int, username: str, cred_ids: Iterable[bytes]) -> List[Credential]:
+        """Bring trashed credentials back; refuses as a whole if a selected
+        discoverable one would collide with a live passkey for the same account.
+        The other selected records count as live: they all come back together."""
+        with self._lock:
+            creds = self._read(uid, username)
+            picked = self._matching(creds, cred_ids, trashed=True)
+            for cred in picked:
+                if not cred.discoverable:
+                    continue
+                for other in creds:
+                    if (
+                        other is not cred
+                        and (other.deleted is None or other in picked)
+                        and other.discoverable
+                        and other.rp_id == cred.rp_id
+                        and other.user_id == cred.user_id
+                    ):
+                        raise StoreError(
+                            f"a newer passkey for this account on {cred.rp_id} exists; "
+                            "delete it first"
+                        )
+            for cred in picked:
+                cred.deleted = None
+            if picked:
+                self._write(uid, username, creds)
+            return picked
+
+    def purge(self, uid: int, username: str, cred_ids: Iterable[bytes]) -> List[Credential]:
+        """Permanently delete trashed credentials and return them."""
+        doomed = set(cred_ids)
+        with self._lock:
+            creds = self._read(uid, username)
+            purged = self._matching(creds, doomed, trashed=True)
+            if purged:
+                kept = [c for c in creds if not (c.id in doomed and c.deleted is not None)]
                 self._write(uid, username, kept)
-            return [c for c in creds if c.id in doomed]
+            return purged
+
+    def update_user(
+        self, uid: int, username: str, cred_id: bytes, user_name: str, display_name: str
+    ) -> None:
+        """Rename the account of a live credential."""
+        with self._lock:
+            creds = self._read(uid, username)
+            for cred in creds:
+                if cred.id == cred_id and cred.deleted is None:
+                    cred.user_name = user_name
+                    cred.user_display_name = display_name
+                    self._write(uid, username, creds)
+                    return
+            raise KeyError(cred_id)
+
+    def pin(self, uid: int, username: str) -> Optional[PinState]:
+        """The stored PIN state, or None when the user has no PIN."""
+        with self._lock:
+            path = self._pin_path(uid)
+            try:
+                doc = json.loads(path.read_bytes())
+            except FileNotFoundError:
+                return None
+            except ValueError as e:
+                raise StoreError(f"{path} is not valid JSON: {e}") from None
+            if not isinstance(doc, dict) or doc.get("format") != PIN_FORMAT_VERSION or doc.get("uid") != uid:
+                raise StoreError(f"{path} has an unexpected format or uid")
+            if doc.get("user") != username:
+                raise StoreError(f"{path} belongs to user {doc.get('user')!r}, not {username!r}")
+            try:
+                sealed = b64decode(doc["pin"])
+                retries = int(doc["retries"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise StoreError(f"{path} contains malformed password data: {e}") from None
+            return PinState(hash=self._open(uid, b"clientPin", sealed), retries=retries)
+
+    def set_pin(self, uid: int, username: str, state: Optional[PinState]) -> None:
+        """Store the PIN state, or delete it when ``state`` is None."""
+        with self._lock:
+            path = self._pin_path(uid)
+            if state is None:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    return
+                _fsync_dir(path.parent)
+                return
+            _make_private_dir(path.parent.parent)
+            _make_private_dir(path.parent)
+            doc = {
+                "format": PIN_FORMAT_VERSION,
+                "uid": uid,
+                "user": username,
+                "pin": b64encode(self.seal(uid, b"clientPin", state.hash)),
+                "retries": state.retries,
+            }
+            _write_file(path, json.dumps(doc, indent=1).encode() + b"\n")

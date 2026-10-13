@@ -1,3 +1,24 @@
+localpasskey (0.2.0) unstable; urgency=medium
+
+  * Feature: deleting moves passkeys to a trash; restore them or permanently
+    delete one at a time by typing its site name (CLI `restore`/`purge`, window
+    Trash view).
+  * Feature: CTAP 2.1 credential management, so Chrome's Settings > Security
+    keys > Sign-in data lists and deletes passkeys once a PIN is set; deleting
+    there moves the passkey to the trash.
+  * Feature: an optional PIN (`localpasskey pin`, window Security Key PIN
+    dialog), needed by browsers to list or delete passkeys; passkey management
+    still asks for your password.
+  * Feature: the window can do everything the CLI does: bulk move to trash by
+    site or all, restore, permanently delete, PIN.
+  * Change: credentials.json is now format 2 (still reads format 1);
+    downgrading to 0.1.1 refuses the file instead of bringing trashed passkeys
+    back.
+  * Docs: README limitations corrected (which missing extensions matter and
+    which do not).
+
+ -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Tue, 13 Oct 2026 12:00:00 +0000
+
 localpasskey (0.1.1) unstable; urgency=medium
 
   * Fix: a "pick this authenticator" touch followed by a registration left

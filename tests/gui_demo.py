@@ -28,6 +28,12 @@ SAMPLES = [
     ("webauthn.io", "webauthn.io", "alice", "alice", False, 3, 1),
 ]
 
+# site, site name, user name, display name, created (days ago), deleted (days ago)
+TRASHED = [
+    ("github.com", "GitHub", "octocat-old", "The Octocat", 200, 7),
+    ("gitlab.com", "GitLab", "alice@example.com", "Alice Example", 15, 2),
+]
+
 
 class SlowApproval:
     def check(self, subject, action_id, message, cancelled=None, timeout=120.0):
@@ -52,6 +58,27 @@ def start_backend():
             created=now - created_days * 86400,
             last_used=None if used_hours is None else now - used_hours * 3600,
         ))
+    doomed = []
+    for site, site_name, user, display, created_days, deleted_days in TRASHED:
+        cred_id = os.urandom(32)
+        key = cose.generate_private_key(cose.ES256)
+        doomed.append((cred_id, now - deleted_days * 86400))
+        store.add(uid, username, Credential(
+            id=cred_id, rp_id=site, user_id=user.encode(), alg=cose.ES256,
+            sealed_key=store.seal(uid, cred_id, cose.private_key_to_bytes(key)),
+            rp_name=site_name, user_name=user, user_display_name=display, discoverable=True,
+            created=now - created_days * 86400, last_used=now - (created_days - 1) * 86400,
+        ))
+    # Backdate the deleted stamps so the trash view shows a plausible age; the
+    # store itself only ever stamps "now".
+    store.remove(uid, username, [cred_id for cred_id, _ in doomed])
+    records = store._read(uid, username)
+    for record in records:
+        for cred_id, deleted_at in doomed:
+            if record.id == cred_id:
+                record.deleted = deleted_at
+    store._write(uid, username, records)
+
     path = os.path.join(tmp.name, "control.sock")
     server = ControlServer(path, store, SlowApproval(), lambda: {"version": "demo", "device": "/dev/hidraw-demo"})
     server.start()

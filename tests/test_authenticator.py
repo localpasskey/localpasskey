@@ -299,10 +299,33 @@ class ProtocolTests(unittest.TestCase):
         info = self.ctap.info
         self.assertEqual(info.versions, ["FIDO_2_0"])
         self.assertEqual(bytes(info.aaguid), bytes(16))
-        self.assertEqual(info.options, {"rk": True, "up": True, "uv": True, "plat": False})
+        self.assertEqual(
+            info.options, {"rk": True, "up": True, "uv": True, "plat": False, "credMgmt": True}
+        )
         self.assertEqual(info.extensions, ["credProtect"])
         self.assertEqual(info.transports, ["usb"])
         self.assertEqual(info.max_creds_in_list, 8)
+        self.assertEqual(info.pin_uv_protocols, [2, 1])
+        # pinUvAuthToken would make platforms fetch a UV token before every
+        # ordinary sign-in, moving the polkit prompt ahead of the lookup.
+        self.assertNotIn("pinUvAuthToken", info.options)
+
+    def test_a_declined_registration_ends_without_a_pin(self):
+        # No PIN is set, so getInfo says nothing about PINs and the declining
+        # answer stands on its own: Chrome must not fall back to asking for a
+        # PIN it cannot set here.
+        self.assertNotIn("clientPin", self.ctap.info.options)
+        self.h.verifier.verdict = Verdict.DENIED
+        with self.assertRaises(CtapError) as caught:
+            self.make()
+        self.assertEqual(caught.exception.code, CtapError.ERR.OPERATION_DENIED)
+
+    def test_get_info_advertises_the_pin_only_once_one_is_set(self):
+        self.assertNotIn("clientPin", self.ctap.info.options)
+        self.h.pins.set(self.h.requester.uid, self.h.requester.username, b"1234")
+        self.assertTrue(self.ctap.get_info().options["clientPin"])
+        with patch.object(self.h.authenticator.resolver, "resolve", return_value=None):
+            self.assertNotIn("clientPin", self.ctap.get_info().options)
 
     def test_signature_counter_never_links_accounts(self):
         # Listing accounts for the chooser signs for all of them; a counter
@@ -363,6 +386,11 @@ class ProtocolTests(unittest.TestCase):
              CtapError.ERR.UNSUPPORTED_ALGORITHM),
             ("up=false registration", 0x01, {1: cdh, 2: rp, 3: user, 4: es256, 7: {"up": False}}, CtapError.ERR.INVALID_OPTION),
             ("PIN auth", 0x01, {1: cdh, 2: rp, 3: user, 4: es256, 8: b"\0" * 16, 9: 1}, CtapError.ERR.PIN_AUTH_INVALID),
+            ("clientPin without a subCommand", 0x06, {1: 1}, CtapError.ERR.MISSING_PARAMETER),
+            ("clientPin with an unknown subCommand", 0x06, {1: 1, 2: 0x08}, CtapError.ERR.INVALID_SUBCOMMAND),
+            ("clientPin with an unknown protocol", 0x06, {1: 9, 2: 1}, CtapError.ERR.INVALID_PARAMETER),
+            ("credentialManagement without a subCommand", 0x0A, {3: 2, 4: b"x"}, CtapError.ERR.MISSING_PARAMETER),
+            ("credentialManagement without pinUvAuthParam", 0x0A, {1: 1}, CtapError.ERR.PUAT_REQUIRED),
             ("rk in getAssertion", 0x02, {1: "example.com", 2: cdh, 5: {"rk": True}}, CtapError.ERR.UNSUPPORTED_OPTION),
             ("non-boolean option", 0x02, {1: "example.com", 2: cdh, 5: {"up": 1}}, CtapError.ERR.CBOR_UNEXPECTED_TYPE),
             ("non-boolean uv with default up", 0x02, {1: "example.com", 2: cdh, 5: {"uv": 1}},
@@ -386,7 +414,7 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(self.raw(command, params), code)
         self.assertEqual(self.h.device.call(CTAPHID.CBOR, b"\x01\xa1")[0], CtapError.ERR.INVALID_CBOR)
-        self.assertEqual(self.h.device.call(CTAPHID.CBOR, b"\x06")[0], CtapError.ERR.INVALID_COMMAND)
+        self.assertEqual(self.h.device.call(CTAPHID.CBOR, b"\x40")[0], CtapError.ERR.INVALID_COMMAND)
         self.assertEqual(self.h.credentials(), [])
 
     def test_excluded_credentials_are_not_revealed_without_approval(self):

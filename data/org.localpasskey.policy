@@ -23,8 +23,8 @@
   </action>
 
   <action id="org.localpasskey.manage">
-    <description>Delete passkeys stored on this computer</description>
-    <message>Authentication is required to delete passkeys stored on this computer</message>
+    <description>Manage passkeys stored on this computer</description>
+    <message>Authentication is required to manage passkeys stored on this computer</message>
     <defaults>
       <allow_any>auth_self</allow_any>
       <allow_inactive>auth_self</allow_inactive>

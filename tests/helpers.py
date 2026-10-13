@@ -13,6 +13,7 @@ from fido2.ctap2.pin import ClientPin
 from fido2.hid import CtapHidDevice
 from fido2.hid.base import CtapHidConnection, HidDescriptor
 
+from localpasskey.clientpin import PinManager
 from localpasskey.ctap2 import Authenticator, Requester, Verdict
 from localpasskey.ctaphid import CtapHidTransport
 from localpasskey.store import CredentialStore
@@ -104,8 +105,14 @@ class Harness:
         )
         self.verifier = FakeVerifier(verdict, delay)
         self.notifier = FakeNotifier()
+        self.pins = PinManager(self.store)
         self.authenticator = Authenticator(
-            self.store, FakeResolver(self.requester), self.verifier, self.notifier, prompt_timeout
+            self.store,
+            FakeResolver(self.requester),
+            self.verifier,
+            self.notifier,
+            prompt_timeout,
+            pins=self.pins,
         )
         self.connection = LoopbackConnection(self.authenticator)
         self.device = self.open_device()

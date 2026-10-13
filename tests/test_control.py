@@ -9,6 +9,7 @@ import time
 import unittest
 
 from localpasskey import client, cose
+from localpasskey.clientpin import MAX_PIN_RETRIES
 from localpasskey.control import MAX_REQUEST, ControlError, ControlServer
 from localpasskey.ctap2 import Verdict
 from localpasskey.polkit import ACTION_MANAGE
@@ -108,12 +109,14 @@ class ControlTests(unittest.TestCase):
         self.handle({"command": "delete", "ids": [self.creds[2].id.hex()]})
         self.assertEqual(
             notifier.notes[-1],
-            ("Passkey deleted", "The passkey for other.org was deleted from this computer.", "activity"),
+            ("Passkey moved to the trash",
+             "The passkey for other.org was moved to the trash from this computer.", "activity"),
         )
         self.handle({"command": "delete", "site": "example.com"})
         self.assertEqual(
             notifier.notes[-1],
-            ("Passkeys deleted", "2 passkeys for example.com were deleted from this computer.", "activity"),
+            ("Passkeys moved to the trash",
+             "2 passkeys for example.com were moved to the trash from this computer.", "activity"),
         )
         self.assertEqual(notifier.uids, [self.uid, self.uid])
 
@@ -121,10 +124,10 @@ class ControlTests(unittest.TestCase):
         notifier = FakeNotifier()
         self.server.notifier = notifier
         many = self.creds + [self.add(f"site{n}.example", b"x") for n in range(2)]
-        self.server._notify_deleted(self.uid, many, caller_uid=self.uid + 1)
+        self.server._notify_deleted(self.uid, many, caller_uid=self.uid + 1, what="moved to the trash")
         self.assertEqual(notifier.notes, [(
-            "Passkeys deleted",
-            "5 passkeys for example.com, other.org, site0.example, … were deleted from this "
+            "Passkeys moved to the trash",
+            "5 passkeys for example.com, other.org, site0.example, … were moved to the trash from this "
             "computer by the administrator.",
             "activity",
         )])
@@ -142,7 +145,7 @@ class ControlTests(unittest.TestCase):
         self.polkit.check = deleting_meanwhile(self.creds[0])
         deleted = self.handle({"command": "delete", "site": "example.com"})["deleted"]
         self.assertEqual([d["id"] for d in deleted], [self.creds[1].id.hex()])
-        self.assertEqual(notifier.notes[-1][0], "Passkey deleted")
+        self.assertEqual(notifier.notes[-1][0], "Passkey moved to the trash")
 
         self.polkit.check = deleting_meanwhile(self.creds[2])
         self.assertEqual(self.handle({"command": "delete", "ids": [self.creds[2].id.hex()]})["deleted"], [])
@@ -155,9 +158,131 @@ class ControlTests(unittest.TestCase):
     def test_delete_by_site(self):
         deleted = self.handle({"command": "delete", "site": "example.com"})["deleted"]
         self.assertEqual(len(deleted), 2)
-        self.assertIn("Delete 2 passkeys", self.polkit.checks[-1][2])
+        self.assertIn("Move 2 passkeys", self.polkit.checks[-1][2])
+        self.assertIn("to the trash", self.polkit.checks[-1][2])
         [left] = self.store.credentials(self.uid, self.name)
         self.assertEqual(left.rp_id, "other.org")
+
+    def test_delete_moves_to_the_trash(self):
+        before = time.time()
+        [deleted] = self.handle({"command": "delete", "ids": [self.creds[0].id.hex()]})["deleted"]
+        self.assertEqual(deleted["site"], "example.com")
+        self.assertGreaterEqual(deleted["deleted"], before)
+        self.assertEqual([c.id for c in self.store.trash(self.uid, self.name)], [self.creds[0].id])
+        self.assertEqual(len(self.store.credentials(self.uid, self.name)), 2)
+
+    def test_list_of_the_trash_reports_what_was_deleted(self):
+        self.handle({"command": "delete", "ids": [self.creds[1].id.hex()]})
+        listing = self.handle({"command": "list", "trash": True})
+        self.assertEqual(listing["user"], self.name)
+        [trashed] = listing["credentials"]
+        self.assertEqual(trashed["id"], self.creds[1].id.hex())
+        self.assertIsNotNone(trashed["deleted"])
+        self.assertIsNone(self.handle({"command": "list"})["credentials"][0]["deleted"])
+        for bad in ("true", 1, [], "no"):
+            with self.subTest(trash=bad), self.assertRaises(ControlError):
+                self.handle({"command": "list", "trash": bad})
+
+    def test_restore_brings_a_trashed_passkey_back(self):
+        self.handle({"command": "delete", "ids": [self.creds[0].id.hex()]})
+        preview = self.handle({"command": "restore", "ids": [self.creds[0].id.hex()], "dry_run": True})
+        self.assertEqual([c["id"] for c in preview["deleted"]], [self.creds[0].id.hex()])
+        self.polkit.checks.clear()
+        restored = self.handle({"command": "restore", "all": True})["restored"]
+        self.assertEqual(len(restored), 1)
+        self.assertIsNone(restored[0]["deleted"])
+        self.assertEqual(len(self.store.credentials(self.uid, self.name)), 3)
+        self.assertEqual(self.store.trash(self.uid, self.name), [])
+        self.assertEqual(self.polkit.checks[-1][2], "Restore 1 passkey from the trash?")
+
+    def test_restore_conflict_becomes_an_error_reply(self):
+        self.server.start()
+        self.handle({"command": "delete", "ids": [self.creds[0].id.hex()]})
+        self.add("example.com", b"a")  # a newer passkey for the same site and account
+        with self.assertRaisesRegex(client.ServiceError, "newer passkey for this account on example.com"):
+            client.request({"command": "restore", "all": True}, self.server.path)
+        self.assertEqual(len(self.store.credentials(self.uid, self.name)), 3)
+        self.assertEqual(len(self.store.trash(self.uid, self.name)), 1)
+
+    def test_restore_from_an_empty_trash_is_refused(self):
+        with self.assertRaises(ControlError):
+            self.handle({"command": "restore", "all": True})
+        self.assertEqual(self.polkit.checks, [])
+
+    def test_purge_deletes_one_trashed_passkey_for_good(self):
+        self.handle({"command": "delete", "ids": [self.creds[0].id.hex()]})
+        prefix = self.creds[0].id.hex()[:8]
+        preview = self.handle({"command": "purge", "ids": [prefix], "dry_run": True})
+        self.assertEqual([c["id"] for c in preview["deleted"]], [self.creds[0].id.hex()])
+        purged = self.handle({"command": "purge", "ids": [prefix]})["purged"]
+        self.assertEqual([c["id"] for c in purged], [self.creds[0].id.hex()])
+        self.assertEqual(self.store.trash(self.uid, self.name), [])
+        self.assertEqual(len(self.store.credentials(self.uid, self.name)), 2)
+        self.assertEqual(self.polkit.checks[-1][2],
+                         "Permanently delete the passkey for example.com? This cannot be undone.")
+
+    def test_purge_refuses_anything_but_one_id(self):
+        self.handle({"command": "delete", "all": True})
+        self.polkit.checks.clear()
+        both = [self.creds[0].id.hex(), self.creds[1].id.hex()]
+        for request in ({"ids": both}, {"all": True}, {"site": "example.com"}, {}):
+            with self.subTest(request=request), self.assertRaises(ControlError):
+                self.handle({"command": "purge", **request})
+        with self.assertRaisesRegex(ControlError, "one passkey at a time"):
+            self.handle({"command": "purge", "ids": both})
+        self.assertEqual(self.polkit.checks, [])
+        self.assertEqual(len(self.store.trash(self.uid, self.name)), 3)
+
+    def test_purge_never_touches_a_live_passkey(self):
+        self.handle({"command": "delete", "ids": [self.creds[0].id.hex()]})
+        with self.assertRaises(ControlError):
+            self.handle({"command": "purge", "ids": [self.creds[1].id.hex()]})
+        self.assertEqual(len(self.store.credentials(self.uid, self.name)), 2)
+        self.assertEqual(len(self.store.trash(self.uid, self.name)), 1)
+
+    def test_purge_is_reported_to_the_owner(self):
+        notifier = FakeNotifier()
+        self.server.notifier = notifier
+        self.handle({"command": "delete", "ids": [self.creds[2].id.hex()]})
+        self.handle({"command": "purge", "ids": [self.creds[2].id.hex()]})
+        self.assertEqual(
+            notifier.notes[-1],
+            ("Passkey permanently deleted",
+             "The passkey for other.org was permanently deleted from this computer.", "activity"),
+        )
+
+    def test_pin_status_set_and_remove(self):
+        status = self.handle({"command": "pin", "action": "status"})
+        self.assertEqual(status, {"ok": True, "user": self.name, "set": False, "retries": MAX_PIN_RETRIES})
+        self.assertEqual(self.polkit.checks, [], "reading the PIN state needs no approval")
+
+        self.polkit.verdict = Verdict.DENIED
+        with self.assertRaises(ControlError):
+            self.handle({"command": "pin", "action": "set", "pin": "1234"})
+        self.assertEqual(self.handle({"command": "pin", "action": "status"})["set"], False)
+
+        self.polkit.verdict = Verdict.APPROVED
+        self.assertEqual(self.handle({"command": "pin", "action": "set", "pin": "1234"}), {"ok": True})
+        self.assertEqual(self.polkit.checks[-1][2],
+                         "Set a new PIN for the passkeys stored on this computer?")
+        status = self.handle({"command": "pin", "action": "status"})
+        self.assertEqual((status["set"], status["retries"]), (True, MAX_PIN_RETRIES))
+
+        self.handle({"command": "pin", "action": "remove"})
+        self.assertEqual(self.polkit.checks[-1][2],
+                         "Remove the PIN for the passkeys stored on this computer?")
+        self.assertEqual(self.handle({"command": "pin", "action": "status"})["set"], False)
+
+    def test_pin_policy_and_action_errors(self):
+        for pin in ("123", "x" * 64, "12\0" + "x" * 10, 1234, None):
+            with self.subTest(pin=pin), self.assertRaises(ControlError):
+                self.handle({"command": "pin", "action": "set", "pin": pin})
+        with self.assertRaisesRegex(ControlError, "PIN must be at least 4 characters"):
+            self.handle({"command": "pin", "action": "set", "pin": "123"})
+        for action in ("get", "", None):
+            with self.subTest(action=action), self.assertRaises(ControlError):
+                self.handle({"command": "pin", "action": action})
+        self.assertFalse(self.server.pins.is_set(self.uid, self.name))
 
     def test_bad_selectors(self):
         for request in ({"ids": ["ab"]}, {"ids": ["ffffffffffff"]}, {"site": "nowhere.test"}, {}):

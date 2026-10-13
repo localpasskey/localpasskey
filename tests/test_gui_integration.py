@@ -8,13 +8,17 @@ from unittest.mock import patch
 try:
     from PyQt6.QtCore import Qt, QTimer
     from PyQt6.QtTest import QTest
-    from PyQt6.QtWidgets import QApplication, QMessageBox
+    from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
     from localpasskey import gui
 except ImportError:
     gui = None
 
+from localpasskey import cose
+from localpasskey.client import ServiceUnavailable
+from localpasskey.clientpin import MAX_PIN_RETRIES, pin_hash
 from localpasskey.ctap2 import Verdict
+from localpasskey.store import Credential, PinState
 from tests.gui_demo import start_backend
 from tests.test_control import FakePolkit
 
@@ -57,6 +61,9 @@ class WindowTests(unittest.TestCase):
     def answer_delete(self, accept, inspect=None):
         def answer():
             box = self.app.activeModalWidget()
+            if box is None:  # bulk actions open the box only after their dry run
+                QTimer.singleShot(10, answer)
+                return
             if inspect is not None:
                 inspect.append(box)
             button = next(
@@ -66,6 +73,30 @@ class WindowTests(unittest.TestCase):
             QTest.mouseClick(button, Qt.MouseButton.LeftButton)
 
         QTimer.singleShot(0, answer)
+
+    def answer_dialog(self, inspect):
+        """Hand the next modal dialog to ``inspect`` once it has laid itself out."""
+        def look():
+            dialog = self.app.activeModalWidget()
+            if dialog is None:
+                QTimer.singleShot(10, look)
+            else:
+                inspect(dialog)
+
+        QTimer.singleShot(0, look)
+
+    @staticmethod
+    def destructive(dialog):
+        box = dialog.findChild(QDialogButtonBox)
+        return next(b for b in box.buttons() if box.buttonRole(b) == QDialogButtonBox.ButtonRole.DestructiveRole)
+
+    def set_trash_view(self, on):
+        if self.window.trash_action.isChecked() != on:
+            self.window.trash_action.toggle()
+        self.wait_for(lambda: not self.window._refreshing and self.window._creds is not None)
+
+    def summaries(self):
+        return sorted(cred["site"] for cred in self.window._creds)
 
     def test_window_loads_over_socket_and_keyboard_search_selects_visible_result(self):
         self.assertEqual(self.window.count_label.text(), "7 passkeys")
@@ -121,15 +152,18 @@ class WindowTests(unittest.TestCase):
         self.wait_for(lambda: "authentication denied" in self.window.statusBar().currentMessage())
         self.assertEqual(self.window.model.rowCount(), 7)
         self.assertTrue(self.window.details.delete_button.isEnabled())
+        self.assertTrue(self.window.delete_action.isEnabled())
         self.assertEqual(len(self.server.verifier.checks), 1)
 
-    def test_approved_delete_updates_store_and_selection(self):
-        deleted_id = self.window.details.cred["id"]
+    def test_approved_delete_moves_the_passkey_to_the_trash(self):
+        doomed = self.window.details.cred
         self.answer_delete(True)
         QTest.mouseClick(self.window.details.delete_button, Qt.MouseButton.LeftButton)
         self.wait_for(lambda: self.window.model.rowCount() == 6 and not self.window._refreshing)
-        self.assertNotEqual(self.window.details.cred["id"], deleted_id)
+        self.assertNotEqual(self.window.details.cred["id"], doomed["id"])
         self.assertEqual(self.window.count_label.text(), "6 passkeys")
+        self.assertIn(doomed["id"], [c.id.hex() for c in self.server.store.trash(self.uid, self.username)])
+        self.assertEqual(self.window.statusBar().currentMessage(), "Passkey moved to the trash")
 
     @unittest.skipIf(os.getuid() == 0, "root intentionally bypasses deletion authentication")
     def test_pending_delete_stays_disabled_across_selection_and_refresh(self):
@@ -161,6 +195,41 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(self.window.delete_action.isEnabled())
         self.assertTrue(self.window.details.delete_button.isEnabled())
 
+    def test_trash_view_lists_the_trash_and_renames_the_third_column(self):
+        self.set_trash_view(True)
+        self.assertEqual(self.window.model.headerData(2, Qt.Orientation.Horizontal), "Deleted")
+        self.assertEqual(self.summaries(), ["github.com", "gitlab.com"])
+        self.assertEqual(self.window.count_label.text(), "2 passkeys")
+        self.assertIs(self.window.side.currentWidget(), self.window.details)
+        for action in (self.window.restore_action, self.window.purge_action, self.window.all_restore_action):
+            self.assertTrue(action.isVisible())
+        for action in (self.window.delete_action, self.window.all_delete_action):
+            self.assertFalse(action.isVisible())
+        self.assertFalse(self.window.delete_action.isEnabled())
+        self.set_trash_view(False)
+        self.assertEqual(self.window.model.headerData(2, Qt.Orientation.Horizontal), "Last used")
+        self.assertEqual(self.window.model.rowCount(), 7)
+
+    def test_details_show_the_algorithm_and_the_deletion_time(self):
+        self.assertEqual(self.window.details.algorithm.text(), "ES256")
+        self.assertFalse(self.window.details.deleted.isVisible())
+        self.set_trash_view(True)
+        trashed = next(c for c in self.window._creds if c["site"] == "gitlab.com")
+        self.window._restore(trashed["id"])
+        self.wait_for(lambda: self.window.details.cred["id"] == trashed["id"])
+        self.assertTrue(self.window.details.deleted.isVisible())
+        self.assertNotEqual(self.window.details.deleted.text(), "Never")
+        self.assertTrue(self.window.details.restore_button.isVisible())
+        self.assertFalse(self.window.details.delete_button.isVisible())
+
+    def test_empty_trash_says_so(self):
+        for cred in self.server.store.trash(self.uid, self.username):
+            self.server.store.purge(self.uid, self.username, [cred.id])
+        self.set_trash_view(True)
+        self.assertEqual(self.window.model.rowCount(), 0)
+        self.assertEqual(self.window.message.title.text(), "The trash is empty")
+        self.assertEqual(self.window.count_label.text(), "0 passkeys")
+
     def test_service_disconnect_and_reconnect(self):
         with patch.dict(os.environ, {"LOCALPASSKEY_SOCKET": os.path.join(self.tmp.name, "missing.sock")}):
             self.window.refresh()
@@ -183,6 +252,207 @@ class WindowTests(unittest.TestCase):
         self.answer_delete(False, dialogs)
         self.window.confirm_delete(cred)
         self.assertEqual(dialogs[0].textFormat(), Qt.TextFormat.PlainText)
+
+    def test_purge_dialog_is_plain_text_and_disabled_until_the_site_is_typed(self):
+        self.set_trash_view(True)
+        trashed = next(c for c in self.window._creds if c["site"] == "gitlab.com")
+        self.window._restore(trashed["id"])
+        seen = []
+
+        def inspect(dialog):
+            seen.append(dialog)
+            labels = {label.text(): label for label in dialog.findChildren(gui.QLabel)}
+            self.assertEqual(
+                [label.textFormat() for label in labels.values()],
+                [Qt.TextFormat.PlainText] * len(labels),
+            )
+            delete = self.destructive(dialog)
+            cancel = dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Cancel)
+            self.assertFalse(delete.isEnabled())
+            self.assertTrue(cancel.isDefault())
+            field = dialog.findChild(gui.QLineEdit)
+            for typed in ("git", "GITLAB.CO"):
+                field.clear()
+                QTest.keyClicks(field, typed)
+                self.assertFalse(delete.isEnabled())
+            QTest.keyClicks(field, "M")
+            self.assertTrue(delete.isEnabled())
+            QTest.mouseClick(cancel, Qt.MouseButton.LeftButton)
+
+        self.answer_dialog(inspect)
+        self.window.purge_action.trigger()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].windowTitle(), "Delete Permanently")
+        # Cancel must not contact the daemon: the passkey is still in the trash.
+        self.wait_for(lambda: not self.window._refreshing)
+        self.assertIn(trashed["id"], [c.id.hex() for c in self.server.store.trash(self.uid, self.username)])
+        self.assertEqual(self.server.verifier.checks, [])
+
+    def test_typed_confirmation_purges_for_good(self):
+        self.set_trash_view(True)
+        doomed = next(c for c in self.window._creds if c["site"] == "gitlab.com")
+        self.window._restore(doomed["id"])
+
+        def inspect(dialog):
+            QTest.keyClicks(dialog.findChild(gui.QLineEdit), "  GitLab.com ")
+            QTest.mouseClick(self.destructive(dialog),
+                             Qt.MouseButton.LeftButton)
+
+        self.answer_dialog(inspect)
+        self.window.purge_action.trigger()
+        self.wait_for(lambda: self.window.model.rowCount() == 1 and not self.window._refreshing)
+        self.assertEqual(self.window.statusBar().currentMessage(), "Passkey permanently deleted")
+        self.assertEqual(len(self.server.store.credentials(self.uid, self.username)), 7)
+        self.assertNotIn(doomed["id"], [c.id.hex() for c in self.server.store.trash(self.uid, self.username)])
+        self.assertEqual(len(self.server.verifier.checks), 1)
+
+    def test_restore_returns_a_trashed_passkey_error_goes_to_the_status_bar(self):
+        doomed = self.window.details.cred
+        self.answer_delete(True)
+        self.window.delete_action.trigger()
+        self.wait_for(lambda: self.window.model.rowCount() == 6 and not self.window._refreshing)
+        self.set_trash_view(True)
+        self.window._restore(doomed["id"])
+        self.wait_for(lambda: self.window.details.cred["id"] == doomed["id"])
+        QTest.mouseClick(self.window.details.restore_button, Qt.MouseButton.LeftButton)
+        self.wait_for(lambda: self.window.model.rowCount() == 2 and not self.window._refreshing)
+        self.assertEqual(self.window.statusBar().currentMessage(), "Passkey restored")
+        self.set_trash_view(False)
+        self.assertEqual(self.window.model.rowCount(), 7)
+        self.assertIn(doomed["id"], [c["id"] for c in self.window._creds])
+
+    def test_restore_refused_by_a_newer_passkey_reports_the_conflict(self):
+        doomed = self.window.details.cred  # amazon.com
+        self.answer_delete(True)
+        self.window.delete_action.trigger()
+        self.wait_for(lambda: self.window.model.rowCount() == 6 and not self.window._refreshing)
+        # A fresh passkey for the same account now lives, so restore must refuse.
+        self.server.store.add(self.uid, self.username, Credential(
+            id=os.urandom(32), rp_id=doomed["site"], user_id=b"alice@example.com", alg=cose.ES256,
+            sealed_key=b"", user_name="alice@example.com", discoverable=True, created=time.time(),
+        ))
+        self.set_trash_view(True)
+        self.window._restore(doomed["id"])
+        self.wait_for(lambda: self.window.details.cred["id"] == doomed["id"])
+        QTest.mouseClick(self.window.details.restore_button, Qt.MouseButton.LeftButton)
+        self.wait_for(lambda: "exists" in self.window.statusBar().currentMessage())
+        self.assertTrue(self.window.statusBar().currentMessage()[0].isupper())
+        self.assertIn(doomed["id"], [c.id.hex() for c in self.server.store.trash(self.uid, self.username)])
+
+    def test_bulk_delete_by_site_confirms_the_count_and_trashes_them_all(self):
+        seen = []
+        self.answer_delete(True, seen)
+        self.window.search.setText("github")
+        self.window.site_delete_action.trigger()
+        self.wait_for(lambda: self.window.model.rowCount() == 5 and not self.window._refreshing)
+        self.assertEqual(seen[0].text(), "Move 2 passkeys to the trash?")
+        self.assertEqual(sorted(c.rp_id for c in self.server.store.trash(self.uid, self.username)),
+                         ["github.com", "github.com", "github.com", "gitlab.com"])
+        self.assertEqual(self.window.statusBar().currentMessage(), "Moved 2 passkeys to the trash")
+
+    def test_bulk_delete_all_and_restore_all_round_trip(self):
+        self.answer_delete(True)
+        self.window.all_delete_action.trigger()
+        self.wait_for(lambda: self.window.model.rowCount() == 0 and not self.window._refreshing)
+        self.assertEqual(self.window.message.title.text(), "No passkeys yet")
+        self.assertEqual(len(self.server.store.trash(self.uid, self.username)), 9)
+        self.set_trash_view(True)
+        seen = []
+        self.answer_delete(True, seen)
+        self.window.all_restore_action.trigger()
+        self.wait_for(lambda: self.window.model.rowCount() == 0 and not self.window._refreshing)
+        self.assertEqual(self.window.message.title.text(), "The trash is empty")
+        self.assertEqual(seen[0].text(), "Restore 9 passkeys from the trash?")
+        self.set_trash_view(False)
+        self.assertEqual(self.window.model.rowCount(), 9)
+        self.assertEqual(self.server.store.trash(self.uid, self.username), [])
+
+    def test_bulk_action_cancelled_asks_the_daemon_nothing_but_the_dry_run(self):
+        seen = []
+        self.answer_delete(False, seen)
+        self.window.all_delete_action.trigger()
+        self.wait_for(lambda: bool(seen) and self.app.activeModalWidget() is None)
+        self.assertEqual(seen[0].text(), "Move 7 passkeys to the trash?")
+        self.assertTrue(self.window.all_delete_action.isEnabled())
+        self.assertEqual(len(self.server.store.credentials(self.uid, self.username)), 7)
+        self.assertEqual(self.server.verifier.checks, [])
+        self.assertEqual(self.window.statusBar().currentMessage(), "")
+
+    def test_pin_dialog_shows_status_and_sets_and_removes_the_pin(self):
+        seen = []
+
+        def inspect(dialog):
+            seen.append(dialog)
+            self.wait_for(lambda: "A PIN is set" in dialog.status.text() or "No PIN is set" in dialog.status.text())
+            self.assertEqual(dialog.status.text(), "No PIN is set.")
+            self.assertFalse(dialog.remove_button.isEnabled())
+            self.assertFalse(dialog.set_button.isEnabled())
+            QTest.keyClicks(dialog.pin, "1234")
+            self.assertFalse(dialog.set_button.isEnabled())
+            QTest.keyClicks(dialog.repeat, "12345")
+            self.assertFalse(dialog.set_button.isEnabled())
+            QTest.keyClick(dialog.repeat, Qt.Key.Key_Backspace)
+            self.assertTrue(dialog.set_button.isEnabled())
+            QTest.mouseClick(dialog.set_button, Qt.MouseButton.LeftButton)
+            self.wait_for(lambda: dialog.status.text() == f"A PIN is set ({MAX_PIN_RETRIES} attempts left).")
+            self.assertTrue(dialog.remove_button.isEnabled())
+            self.assertEqual(dialog.pin.text(), "")
+            self.assertEqual(dialog.repeat.text(), "")
+            state = self.server.store.pin(self.uid, self.username)
+            self.assertEqual(state.hash, pin_hash(b"1234"))
+            self.assertEqual(state.retries, MAX_PIN_RETRIES)
+            QTest.mouseClick(dialog.remove_button, Qt.MouseButton.LeftButton)
+            self.wait_for(lambda: dialog.status.text() == "No PIN is set.")
+            self.assertIsNone(self.server.store.pin(self.uid, self.username))
+            dialog.reject()
+
+        self.answer_dialog(inspect)
+        self.window.show_pin_dialog()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].windowTitle(), "Security Key PIN")
+        self.assertEqual(len(self.server.verifier.checks), 2)
+        self.assertEqual([m[2] for m in self.server.verifier.checks],
+                         ["Set a new PIN for the passkeys stored on this computer?",
+                          "Remove the PIN for the passkeys stored on this computer?"])
+
+    def test_pin_dialog_does_not_invent_a_state_when_the_status_request_fails(self):
+        # A daemon restart or socket timeout must not read as "no PIN is set",
+        # which would offer to set one over the existing PIN and hide Remove.
+        self.server.store.set_pin(self.uid, self.username, PinState(pin_hash(b"1234"), MAX_PIN_RETRIES))
+        real_run = self.window.tasks.run
+
+        def failing_run(work, done):
+            if done.__name__ == "_on_loaded":
+                done(None, ServiceUnavailable("the service is not running"))
+            else:
+                real_run(work, done)
+
+        def inspect(dialog):
+            self.wait_for(lambda: dialog.status.text() != "Checking…")
+            self.assertEqual(dialog.status.text(), "Could not read the PIN state.")
+            for widget in (dialog.pin, dialog.repeat, dialog.set_button, dialog.remove_button):
+                self.assertFalse(widget.isEnabled(), "the state is unknown, so nothing is offered")
+            self.assertIn("not running", self.window.statusBar().currentMessage())
+            dialog.reject()
+
+        with patch.object(self.window.tasks, "run", failing_run):
+            self.answer_dialog(inspect)
+            self.window.show_pin_dialog()
+        self.assertIsNotNone(self.server.store.pin(self.uid, self.username))
+
+    def test_pin_dialog_reports_a_too_short_pin(self):
+        def inspect(dialog):
+            self.wait_for(lambda: dialog.status.text() == "No PIN is set.")
+            QTest.keyClicks(dialog.pin, "123")
+            QTest.keyClicks(dialog.repeat, "123")
+            QTest.mouseClick(dialog.set_button, Qt.MouseButton.LeftButton)
+            self.wait_for(lambda: "at least 4 characters" in self.window.statusBar().currentMessage())
+            self.assertEqual(dialog.status.text(), "No PIN is set.")
+            dialog.reject()
+
+        self.answer_dialog(inspect)
+        self.window.show_pin_dialog()
+        self.assertIsNone(self.server.store.pin(self.uid, self.username))
 
     def test_empty_store_shows_onboarding(self):
         self.server.store.remove(self.uid, self.username,

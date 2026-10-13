@@ -3,7 +3,9 @@
 Qt 6 with QDarkStyle, the dark theme Electrum and Feather Wallet use.
 Everything goes through localpasskeyd's control socket, so the window only
 sees the current user's passkeys, and deleting one makes the service ask for
-the user's password first.
+the user's password first. Deleted passkeys wait in the trash view until they
+are restored or permanently deleted, and the PIN browsers ask for can be set
+or removed here too.
 """
 
 from __future__ import annotations
@@ -20,9 +22,9 @@ from PyQt6.QtGui import (
     QStandardItem, QStandardItemModel,
 )
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QStackedWidget, QTreeView, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QSplitter,
+    QStackedWidget, QStyle, QTreeView, QVBoxLayout, QWidget,
 )
 
 from . import __version__
@@ -34,7 +36,15 @@ PALETTE = qdarkstyle.DarkPalette
 CRED_ROLE = Qt.ItemDataRole.UserRole
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 COLUMNS = ("Website", "Account", "Last used")
+TRASH_COLUMNS = ("Website", "Account", "Deleted")
 _SECOND_LEVEL = {"ac", "co", "com", "edu", "gov", "net", "org"}
+# Bulk confirmations: window title, button, question, what the passkeys do meanwhile.
+BULK = {
+    "delete": ("Move to Trash", "Move to Trash", "Move {n} passkey{s} to the trash?",
+               "They stop working until you restore them."),
+    "restore": ("Restore Passkeys", "Restore", "Restore {n} passkey{s} from the trash?",
+                "They sign you in again right away."),
+}
 
 
 def brand(site: str) -> str:
@@ -79,16 +89,17 @@ def when(timestamp, today=None) -> str:
     return day if moment.year == today.year else f"{day} {moment.year}"
 
 
-def passkey_row(cred: dict) -> list:
+def passkey_row(cred: dict, trashed: bool = False) -> list:
     """The table cells for one passkey, carrying the values the columns sort by."""
     website = QStandardItem(cred["site"])
     website.setData(cred, CRED_ROLE)
     website.setData("\0".join(sort_key(cred)), SORT_ROLE)
     account = QStandardItem(account_label(cred))
     account.setData(account_label(cred).lower(), SORT_ROLE)
-    used = QStandardItem(when(cred.get("last_used")))
-    used.setData(cred.get("last_used") or 0.0, SORT_ROLE)
-    return [website, account, used]
+    moment = cred.get("deleted") if trashed else cred.get("last_used")
+    when_item = QStandardItem(when(moment))
+    when_item.setData(moment or 0.0, SORT_ROLE)
+    return [website, account, when_item]
 
 
 def monogram(text: str, size: int, ratio: float) -> QPixmap:
@@ -187,18 +198,29 @@ class Details(QFrame):
         self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.username = self._row("Username", copy=lambda: window.copy(self.cred["user_name"], "Username"))
         self.display_name = self._row("Display name")
+        self.algorithm = self._row("Algorithm")
         self.created = self._row("Created")
         self.last_used = self._row("Last used")
+        self.deleted = self._row("Deleted")
         self.ident = self._row("ID", copy=lambda: window.copy(self.cred["id"], "ID"))
 
         self.open_button = QPushButton("Open Website")
         self.open_button.clicked.connect(lambda: window.open_site(self.cred))
-        self.delete_button = QPushButton("Delete Passkey…")
+        self.delete_button = QPushButton("Move to Trash…")
         self.delete_button.clicked.connect(lambda: window.confirm_delete(self.cred))
         buttons = QHBoxLayout()
         buttons.addWidget(self.open_button)
         buttons.addWidget(self.delete_button)
         buttons.addStretch(1)
+
+        self.trash_buttons = QHBoxLayout()
+        self.restore_button = QPushButton("Restore")
+        self.restore_button.clicked.connect(self._restore_clicked)
+        self.purge_button = QPushButton("Delete Permanently…")
+        self.purge_button.clicked.connect(self._purge_clicked)
+        self.trash_buttons.addWidget(self.restore_button)
+        self.trash_buttons.addWidget(self.purge_button)
+        self.trash_buttons.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -206,7 +228,18 @@ class Details(QFrame):
         layout.addLayout(heading)
         layout.addLayout(self.form)
         layout.addLayout(buttons)
+        layout.addLayout(self.trash_buttons)
         layout.addStretch(1)
+
+    @property
+    def window(self):
+        return self.parentWidget().window()
+
+    def _restore_clicked(self):  # the button belongs to this pane, the request to the window
+        self.window._send({"command": "restore", "ids": [self.cred["id"]]}, "Restoring…", "Passkey restored")
+
+    def _purge_clicked(self):
+        self.window.confirm_purge(self.cred)
 
     def _row(self, title, copy=None):
         value = QLabel()
@@ -234,6 +267,8 @@ class Details(QFrame):
         self.site.setText(site)
         site_name = cred.get("site_name") or ""
         kind = "Passkey" if cred["discoverable"] else "Security key"
+        if cred.get("deleted") is not None:
+            kind = f"In the trash · {kind}"
         self.summary.setText(f"{site_name} · {kind}" if site_name and site_name.lower() != site.lower() else kind)
         self.summary.setToolTip(
             "Signs you in without a username" if cred["discoverable"]
@@ -244,15 +279,24 @@ class Details(QFrame):
         self.display_name.setText(display_name)
         self._show_row(self.username, bool(user_name))
         self._show_row(self.display_name, bool(display_name) and display_name != user_name)
+        trashed = cred.get("deleted") is not None
+        self.algorithm.setText(cred.get("algorithm") or "")
         self.created.setText(when(cred.get("created")))
         self.last_used.setText(when(cred.get("last_used")))
+        self.deleted.setText(when(cred.get("deleted")))
+        self._show_row(self.deleted, trashed)
         self.ident.setText(cred["id"][:12])
-        self.open_button.setVisible(is_website(site))
+        self.open_button.setVisible(is_website(site) and not trashed)
+        self.delete_button.setVisible(not trashed)
+        self.restore_button.setVisible(trashed)
+        self.purge_button.setVisible(trashed)
         self.set_busy(False)
 
     def set_busy(self, busy):
         self.delete_button.setEnabled(not busy)
-        self.delete_button.setText("Deleting…" if busy else "Delete Passkey…")
+        self.delete_button.setText("Moving…" if busy else "Move to Trash…")
+        self.restore_button.setEnabled(not busy)
+        self.purge_button.setEnabled(not busy)
 
 
 class Message(QWidget):
@@ -282,6 +326,100 @@ class Message(QWidget):
         self.text.setVisible(bool(text))
 
 
+class PinDialog(QDialog):
+    """Set or remove the PIN browsers ask for before they list or delete passkeys."""
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+        self.setWindowTitle("Security Key PIN")
+        self.status = QLabel()
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.why = QLabel(
+            "Browsers ask for this PIN in their security-key settings to list or delete "
+            "the passkeys stored on this computer."
+        )
+        self.why.setTextFormat(Qt.TextFormat.PlainText)
+        self.why.setWordWrap(True)
+        self.why.setStyleSheet(f"color: {PALETTE.COLOR_TEXT_3};")
+        self.pin = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
+        self.repeat = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
+        form = QFormLayout()
+        form.addRow("New PIN", self.pin)
+        form.addRow("Repeat", self.repeat)
+        self.set_button = QPushButton("Set PIN")
+        self.set_button.clicked.connect(lambda: self._request("set"))
+        self.remove_button = QPushButton("Remove PIN")
+        self.remove_button.clicked.connect(lambda: self._request("remove"))
+        close = QPushButton("Close")
+        close.clicked.connect(self.reject)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.set_button)
+        buttons.addWidget(self.remove_button)
+        buttons.addStretch(1)
+        buttons.addWidget(close)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.status)
+        layout.addWidget(self.why)
+        layout.addLayout(form)
+        layout.addLayout(buttons)
+        for field in (self.pin, self.repeat):
+            field.textChanged.connect(self._sync)
+        # Nothing is known until the daemon answers; keep the controls dark so no
+        # click can race the status request.
+        self.busy = True
+        self.status.setText("Checking…")
+        for widget in (self.pin, self.repeat, self.set_button, self.remove_button):
+            widget.setEnabled(False)
+        self.window.tasks.run(lambda: request({"command": "pin", "action": "status"}), self._on_loaded)
+
+    def _sync(self, *_):
+        filled = bool(self.pin.text()) and self.pin.text() == self.repeat.text()
+        self.set_button.setEnabled(filled and not self.busy)
+
+    def show_state(self, is_set, retries):
+        self.busy = False
+        self.set = is_set
+        self.retries = retries
+        self.status.setText(
+            f"A PIN is set ({retries} attempts left)." if is_set else "No PIN is set."
+        )
+        for widget in (self.pin, self.repeat):
+            widget.setEnabled(True)
+        self.remove_button.setEnabled(is_set)
+        self._sync()
+
+    def _on_loaded(self, result, error):
+        if error is not None:
+            # The state is unknown, not "no PIN set": inventing one would offer
+            # to set a PIN over an existing one and hide Remove PIN.
+            self.status.setText("Could not read the PIN state.")
+            self.window._error(error)
+            return
+        self.show_state(result["set"], result["retries"])
+
+    def _request(self, action):
+        payload = {"command": "pin", "action": action}
+        if action == "set":
+            if self.pin.text() != self.repeat.text():
+                self.status.setText("The PINs do not match.")
+                return
+            payload["pin"] = self.pin.text()
+        self.busy = True
+        self.remove_button.setEnabled(False)
+        self._sync()
+        self.window.tasks.run(lambda: request(payload), self._sent)
+
+    def _sent(self, result, error):
+        if error is not None:
+            self.window._error(error)
+        else:
+            self.pin.clear()
+            self.repeat.clear()
+        # Re-read the state either way: a refused PIN may still have burned a retry.
+        self.window.tasks.run(lambda: request({"command": "pin", "action": "status"}), self._on_loaded)
+
+
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -292,7 +430,8 @@ class Window(QMainWindow):
         self._creds = None
         self._selected_id = None
         self._refreshing = False
-        self._deleting = False
+        self._busy = False
+        self._trash = False
 
         self.model = QStandardItemModel(0, len(COLUMNS))
         self.model.setHorizontalHeaderLabels(COLUMNS)
@@ -372,15 +511,39 @@ class Window(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         action(file_menu, "&Refresh", self.refresh, QKeySequence.StandardKey.Refresh)
         file_menu.addSeparator()
+        action(file_menu, "Security Key &PIN…", self.show_pin_dialog)
+        file_menu.addSeparator()
         action(file_menu, "&Quit", self.close, QKeySequence.StandardKey.Quit)
+        view_menu = self.menuBar().addMenu("&View")
+        self.trash_action = QAction("Show &Trash", self, checkable=True)
+        self.trash_action.setShortcut(QKeySequence("Ctrl+T"))
+        self.trash_action.toggled.connect(self.set_trash)
+        view_menu.addAction(self.trash_action)
         self.passkey_menu = self.menuBar().addMenu("&Passkey")
         self.copy_action = action(self.passkey_menu, "&Copy Username",
                                   lambda: self.copy(self.details.cred["user_name"], "Username"),
                                   QKeySequence.StandardKey.Copy)
         self.open_action = action(self.passkey_menu, "&Open Website", lambda: self.open_site(self.details.cred))
         self.passkey_menu.addSeparator()
-        self.delete_action = action(self.passkey_menu, "&Delete…", lambda: self.confirm_delete(self.details.cred),
+        self.delete_action = action(self.passkey_menu, "Move to &Trash…",
+                                    lambda: self.confirm_delete(self.details.cred),
                                     QKeySequence.StandardKey.Delete)
+        self.site_delete_action = action(self.passkey_menu, "Move All for This &Website to Trash…",
+                                         lambda: self._bulk("delete", {"site": self.details.cred["site"]}))
+        self.all_delete_action = action(self.passkey_menu, "Move All Passkeys to Trash…",
+                                        lambda: self._bulk("delete", {"all": True}))
+        self.passkey_menu.addSeparator()
+        self.restore_action = action(self.passkey_menu, "&Restore",
+                                     lambda: self._send({"command": "restore", "ids": [self.details.cred["id"]]},
+                                                        "Restoring…", "Passkey restored"))
+        self.site_restore_action = action(self.passkey_menu, "Restore All for This We&bsite",
+                                          lambda: self._bulk("restore", {"site": self.details.cred["site"]}))
+        self.all_restore_action = action(self.passkey_menu, "Restore All",
+                                         lambda: self._bulk("restore", {"all": True}))
+        self.purge_action = action(self.passkey_menu, "Delete &Permanently…",
+                                   lambda: self.confirm_purge(self.details.cred))
+        self.trash_actions = (self.restore_action, self.site_restore_action, self.all_restore_action,
+                              self.purge_action)
         search = QAction(self)
         search.setShortcut(QKeySequence.StandardKey.Find)
         search.triggered.connect(lambda: (self.search.setFocus(), self.search.selectAll()))
@@ -393,17 +556,33 @@ class Window(QMainWindow):
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             self.refresh()
 
+    def set_trash(self, on):
+        """Show the trash instead of the live passkeys."""
+        self._trash = bool(on)
+        self._creds = None  # forces a rebuild when the new list arrives, even if both are empty
+        self._selected_id = None
+        self.refresh()
+
     def refresh(self):
         if self._refreshing:
             return
         self._refreshing = True
-        self.tasks.run(
-            lambda: (request({"command": "status"}), request({"command": "list"})["credentials"]),
-            self._on_loaded,
-        )
+        trashed = self._trash
 
-    def _on_loaded(self, result, error):
+        def load():
+            status = request({"command": "status"})
+            payload = {"command": "list"}
+            if trashed:
+                payload["trash"] = True
+            return status, request(payload)["credentials"]
+
+        self.tasks.run(load, lambda result, error: self._on_loaded(result, error, trashed))
+
+    def _on_loaded(self, result, error, trashed=False):
         self._refreshing = False
+        if trashed != self._trash:  # the view changed while the request was in flight
+            self.refresh()
+            return
         if error is not None:
             self.count_label.setText("")
             self.service_label.setText("Service not running" if isinstance(error, ServiceUnavailable) else str(error))
@@ -418,15 +597,17 @@ class Window(QMainWindow):
         self.service_label.setToolTip(
             f"localpasskeyd {status['version']} · virtual security key {status.get('device') or 'missing'}"
         )
-        if creds != self._creds:
+        if (trashed, creds) != (self._trash, self._creds):
+            self._trash = trashed
             self._creds = creds
             self._rebuild()
 
     def _rebuild(self):
         selected = self._selected_id
+        self.model.setHorizontalHeaderLabels(TRASH_COLUMNS if self._trash else COLUMNS)
         self.model.removeRows(0, self.model.rowCount())
         for cred in self._creds or []:
-            self.model.appendRow(passkey_row(cred))
+            self.model.appendRow(passkey_row(cred, trashed=self._trash))
         self._restore(selected)
 
     def _proxy_row_of(self, cred_id):
@@ -454,16 +635,32 @@ class Window(QMainWindow):
         rows = self.table.selectionModel().selectedRows()
         self._show(rows[0].data(CRED_ROLE) if rows else None)
 
+    def _resync(self):
+        """Re-enable the actions for whatever is selected now."""
+        self._sync_actions(self.details.cred if self._selected_id else None)
+
+    def _sync_actions(self, cred):
+        """Enable exactly the actions the current view and selection allow."""
+        for act in self.trash_actions:
+            act.setVisible(self._trash)
+        for act in (self.delete_action, self.site_delete_action, self.all_delete_action):
+            act.setVisible(not self._trash)
+        self.all_delete_action.setEnabled(not self._trash and not self._busy)
+        self.all_restore_action.setEnabled(self._trash and not self._busy)
+        chosen = cred is not None
+        for act in (self.copy_action, self.open_action, self.delete_action, self.site_delete_action,
+                    self.restore_action, self.site_restore_action, self.purge_action):
+            act.setEnabled(chosen and not self._busy)
+        if chosen:
+            self.open_action.setEnabled(is_website(cred["site"]) and not self._trash and not self._busy)
+            self.copy_action.setEnabled(bool(cred.get("user_name")) and not self._busy)
+
     def _show(self, cred):
-        for act in (self.copy_action, self.open_action, self.delete_action):
-            act.setEnabled(cred is not None)
+        self._sync_actions(cred)
         if cred is not None:
             self._selected_id = cred["id"]
             self.details.show_cred(cred)
-            self.details.set_busy(self._deleting)
-            self.delete_action.setEnabled(not self._deleting)
-            self.open_action.setEnabled(is_website(cred["site"]))
-            self.copy_action.setEnabled(bool(cred.get("user_name")))
+            self.details.set_busy(self._busy)
             self.side.setCurrentWidget(self.details)
             return
         self._selected_id = None
@@ -472,6 +669,11 @@ class Window(QMainWindow):
                 "LocalPasskey isn't running",
                 "Start the service with “sudo systemctl start localpasskey”. "
                 "This window reconnects by itself.",
+            )
+        elif self._trash and not self._creds:
+            self.message.set_message(
+                "The trash is empty",
+                "Passkeys you move to the trash wait here until you restore them.",
             )
         elif not self._creds:
             self.message.set_message(
@@ -498,42 +700,131 @@ class Window(QMainWindow):
             self.statusBar().showMessage("Could not open the website", 4000)
 
     def confirm_delete(self, cred):
-        if self._deleting:
+        if self._busy:
             return
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("Delete Passkey")
+        box.setWindowTitle("Move to Trash")
         box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(f"Delete the passkey for “{account_label(cred)}” on {cred['site']}?")
+        box.setText(f"Move the passkey for “{account_label(cred)}” on {cred['site']} to the trash?")
         box.setInformativeText(
-            "You won't be able to sign in with it anymore. "
-            "Remove it from your account settings on the website too."
+            "It stops working until you restore it. Remove it from your account settings "
+            "on the website too."
         )
-        delete = box.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+        move = box.addButton("Move to Trash", QMessageBox.ButtonRole.DestructiveRole)
         box.addButton(QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         box.exec()
-        if box.clickedButton() is not delete:
+        if box.clickedButton() is not move:
             return
-        self._deleting = True
-        self.delete_action.setEnabled(False)
-        self.details.set_busy(True)
-        self.statusBar().showMessage("Waiting for you to authenticate…")
-        self.tasks.run(lambda: request({"command": "delete", "ids": [cred["id"]]}),
-                       lambda result, error: self._on_deleted(cred, error))
+        self._send({"command": "delete", "ids": [cred["id"]]}, "Waiting for you to authenticate…",
+                   "Passkey moved to the trash", cred["id"])
 
-    def _on_deleted(self, cred, error):
-        self._deleting = False
-        self.delete_action.setEnabled(self._selected_id is not None)
-        self.details.set_busy(False)
-        if error is not None:
-            message = str(error)
-            self.statusBar().showMessage(message[:1].upper() + message[1:], 6000)
+    def _bulk(self, command, selector):
+        """The site/all forms: confirm the count the daemon reports first."""
+        if self._busy:
             return
-        self.statusBar().showMessage("Passkey deleted", 4000)
-        if self._selected_id == cred["id"]:
-            self._selected_id = None
-        self.refresh()
+        title, button_text, question, note = BULK[command]
+        self._busy = True
+
+        def loaded(doomed, error):
+            self._busy = False
+            if error is not None:
+                self._error(error)
+                self._resync()
+                return
+            # Send exactly the IDs the daemon counted and the user approved.
+            self._confirm_doomed(command, doomed, title, button_text, question, note)
+
+        self.tasks.run(lambda: request({"command": command, **selector, "dry_run": True})["deleted"], loaded)
+
+    def _confirm_doomed(self, command, doomed, title, button_text, question, note):
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(question.format(n=len(doomed), s="s" if len(doomed) != 1 else ""))
+        box.setInformativeText(note)
+        go = box.addButton(button_text, QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is not go:
+            self._resync()
+            return
+        done = "Moved {n} passkey{s} to the trash" if command == "delete" else "Restored {n} passkey{s}"
+        self._send({"command": command, "ids": [cred["id"] for cred in doomed]},
+                   "Waiting for you to authenticate…",
+                   done.format(n=len(doomed), s="s" if len(doomed) != 1 else ""))
+
+    def confirm_purge(self, cred):
+        if self._busy:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Delete Permanently")
+        warning = QLabel()
+        warning.setTextFormat(Qt.TextFormat.PlainText)
+        warning.setPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning).pixmap(48, 48))
+        text = QLabel(f"Permanently delete the passkey for “{account_label(cred)}” on {cred['site']}?")
+        text.setTextFormat(Qt.TextFormat.PlainText)
+        text.setWordWrap(True)
+        instruction = QLabel(f'Type "{cred["site"]}" to confirm. This cannot be undone.')
+        instruction.setTextFormat(Qt.TextFormat.PlainText)
+        typed = QLineEdit()
+        buttons = QDialogButtonBox()
+        delete = buttons.addButton("Delete Permanently", QDialogButtonBox.ButtonRole.DestructiveRole)
+        cancel = buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        delete.setEnabled(False)
+        typed.textChanged.connect(
+            lambda value: delete.setEnabled(value.strip().casefold() == cred["site"].casefold())
+        )
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        delete.clicked.connect(dialog.accept)
+        layout = QVBoxLayout(dialog)
+        row = QHBoxLayout()
+        row.addWidget(warning, 0, Qt.AlignmentFlag.AlignTop)
+        row.addWidget(text, 1)
+        layout.addLayout(row)
+        layout.addWidget(instruction)
+        layout.addWidget(typed)
+        layout.addWidget(buttons)
+        cancel.setDefault(True)  # only takes once the button belongs to the dialog
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._send({"command": "purge", "ids": [cred["id"]]}, "Waiting for you to authenticate…",
+                   "Passkey permanently deleted", cred["id"])
+
+    def _send(self, payload, note, done, forget_id=None):
+        """Run one delete/restore/purge request, with the same busy handling for all three."""
+        if self._busy:
+            return
+        self._busy = True
+        self.statusBar().showMessage(note)
+        self._resync()
+        if self.side.currentWidget() is self.details:
+            self.details.set_busy(True)
+
+        def finished(result, error):
+            self._busy = False
+            self.details.set_busy(False)
+            self._resync()
+            if error is not None:
+                self._error(error)
+            else:
+                self.statusBar().showMessage(done, 4000)
+                if forget_id is not None and self._selected_id == forget_id:
+                    self._selected_id = None
+            self.refresh()
+
+        self.tasks.run(lambda: request(payload), finished)
+
+    def _error(self, error):
+        message = str(error)
+        self.statusBar().showMessage(message[:1].upper() + message[1:], 6000)
+
+    def show_pin_dialog(self):
+        PinDialog(self).exec()
 
     def _about(self):
         QMessageBox.about(

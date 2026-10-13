@@ -65,6 +65,7 @@ def run(config, state_dir, socket_path):
     from gi.repository import Gio
 
     from . import uhid
+    from .clientpin import PinManager
     from .control import ControlServer
     from .ctap2 import Authenticator
     from .ctaphid import CtapHidTransport
@@ -74,6 +75,9 @@ def run(config, state_dir, socket_path):
     from .store import CredentialStore
 
     store = CredentialStore(state_dir)
+    # One PinManager for both servers, so a PIN set from a browser and one set
+    # from `localpasskey pin set` are the same PIN and the same tokens.
+    pins = PinManager(store)
     bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
     verifier = PolkitVerifier(bus)
     version = tuple(int(part) for part in __version__.split(".")[:3])
@@ -91,6 +95,7 @@ def run(config, state_dir, socket_path):
         verifier,
         notifier,
         config.prompt_timeout,
+        pins=pins,
     )
     transport = CtapHidTransport(device.send_input, authenticator, version)
     control = ControlServer(
@@ -99,6 +104,7 @@ def run(config, state_dir, socket_path):
         verifier,
         lambda: {"version": __version__, "device": device.hidraw_path()},
         notifier,
+        pins=pins,
     )
 
     wake_read, wake_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
