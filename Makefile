@@ -56,7 +56,7 @@ deb:
 	dpkg-buildpackage --build=binary --no-sign
 	mkdir -p dist
 	version=$$(dpkg-parsechangelog -S Version) && \
-		mv ../localpasskey_$${version}_* ../localpasskey-gui_$${version}_* dist/
+		mv ../localpasskey_$${version}_* dist/
 
 clean:
 	find . -name __pycache__ -prune -exec rm -rf {} +

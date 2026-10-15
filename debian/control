@@ -25,11 +25,19 @@ Depends:
  polkitd | policykit-1,
  python3-cryptography,
  python3-gi,
+ python3-pyqt6,
+ python3-qdarkstyle,
+ qt6-svg-plugins,
  udev,
 Recommends:
- localpasskey-gui,
  polkit-1-auth-agent,
  python3-fido2,
+Breaks:
+ localpasskey-gui (<< ${binary:Version}),
+Replaces:
+ localpasskey-gui (<< ${binary:Version}),
+Provides:
+ localpasskey-gui (= ${binary:Version}),
 Suggests:
  fido2-tools,
 Description: passkeys stored on this computer, like Windows Hello
@@ -46,20 +54,5 @@ Description: passkeys stored on this computer, like Windows Hello
  authentication dialog with the user's own password (or whatever else PAM
  accepts, such as a fingerprint). Any number of accounts per site is
  supported; browsers show an account chooser. The localpasskey command
- lists and deletes stored passkeys.
-
-Package: localpasskey-gui
-Architecture: all
-Depends:
- ${misc:Depends},
- ${python3:Depends},
- localpasskey (= ${binary:Version}),
- python3-pyqt6,
- python3-qdarkstyle,
- qt6-svg-plugins,
-Description: window for browsing and removing LocalPasskey passkeys
- A small Qt window, listed as LocalPasskey in the applications menu, that
- shows the passkeys LocalPasskey keeps for you, in the QDarkStyle theme
- known from Electrum and Feather Wallet. It can search them, show when each
- one was created and last used, copy the username, open the website, and
- delete a passkey after you confirm with your password.
+ and the LocalPasskey window (Qt, QDarkStyle theme) list, back up and
+ delete stored passkeys.

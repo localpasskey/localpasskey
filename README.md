@@ -92,13 +92,15 @@ localpasskey/
 ```sh
 sudo apt install debhelper dh-python python3-cryptography python3-gi python3-fido2 \
     python3-pyqt6 python3-qdarkstyle
-make deb                      # runs the test suite, then builds both packages into dist/
-sudo apt install ./dist/localpasskey_0.2.0_all.deb ./dist/localpasskey-gui_0.2.0_all.deb
+make deb                      # runs the test suite, then builds the package into dist/
+sudo apt install ./dist/localpasskey_0.2.0_all.deb
 ```
 
-`localpasskey` is the service and command-line tool. `localpasskey-gui` is
-the optional window, built with Qt 6 and the QDarkStyle theme that Electrum and
-Feather Wallet use.
+The one `localpasskey` package holds the service, the command-line tool, the
+Chrome/Chromium bridge and the window (`localpasskey-gui`), built with Qt 6 and
+the QDarkStyle theme that Electrum and Feather Wallet use. It replaces the
+separate `localpasskey-gui` package of earlier releases; upgrading removes that
+one.
 
 The package enables and starts `localpasskey.service`. Check it with:
 
