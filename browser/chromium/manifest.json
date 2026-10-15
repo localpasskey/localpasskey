@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "LocalPasskey",
+  "version": "0.2.0",
+  "description": "Lets Chrome and Chromium use LocalPasskey as this device's passkey authenticator.",
+  "permissions": [
+    "webAuthenticationProxy",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAy6qeU8BIdrPxinmPSF9W93BfUT1srdT2QG3B+NFhXtmVoA+vT5yd4YsV8ecunJ1sUIjNtpUMQRr8JS91jwD6Aiszsb44ivm6VqgofB+eQOsVDNS3CoBXynxj0PcFfPT4qdF8ev8ZepKrR8qvBA8zrQmEAtayQxdRUYSihRiOsuPYp0ZovR+30yNTdrJK7QJEoM4qomuvzE9ylzazcQ0jiZWNrkYR3DWjuZtwvYVnjWW/egLGgsiwNn32Nm4sF7fixsvZbF+Lr8a4a5cTJWjc1OyB+Dm3CYRerpiw7QJ45l2OD8Uc75vTczkW3HJ0rYWHXG03gCBJE/iZlQ3IeznyEQIDAQAB"
+}
