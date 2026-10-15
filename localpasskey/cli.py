@@ -173,9 +173,9 @@ def cmd_pin(args):
     if args.action == "status":
         status = request(payload, args.socket)
         if status["set"]:
-            print(f"A PIN is set ({status['retries']} attempts left).")
+            print(f"A security key PIN is set ({status['retries']} attempts left).")
         else:
-            print("No PIN is set.")
+            print("No security key PIN is set. Browsers need one to list or delete passkeys.")
         return 0
     if args.action == "set":
         pin = getpass.getpass("New PIN: ")
@@ -183,7 +183,7 @@ def cmd_pin(args):
             raise CliError("the PINs do not match")
         payload["pin"] = pin
     _ask(payload, args)
-    print("PIN set." if args.action == "set" else "PIN removed.")
+    print("Security key PIN set." if args.action == "set" else "Security key PIN removed.")
     return 0
 
 
@@ -355,7 +355,8 @@ def main(argv=None):
 
     sub = commands.add_parser(
         "pin",
-        help="manage the PIN browsers ask for in their security-key settings to list or delete passkeys",
+        help="manage the security key PIN browsers ask for in their security-key settings to list or "
+        "delete passkeys (not your login password)",
     )
     sub.add_argument("action", choices=("status", "set", "remove"), help="show, set or remove the PIN")
     sub.add_argument("--user", help="act on another user's PIN (root only)")

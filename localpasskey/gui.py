@@ -20,20 +20,20 @@ from datetime import date, datetime, timedelta
 import qdarkstyle
 from PyQt6.QtCore import QEvent, QObject, QRectF, QSortFilterProxyModel, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
-    QAction, QColor, QDesktopServices, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap,
-    QStandardItem, QStandardItemModel,
+    QAction, QColor, QDesktopServices, QGuiApplication, QIcon, QKeySequence, QPainter, QPainterPath,
+    QPen, QPixmap, QStandardItem, QStandardItemModel,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPlainTextEdit, QPushButton, QRadioButton, QSplitter, QStackedWidget, QStyle, QTreeView, QVBoxLayout,
-    QWidget,
+    QPlainTextEdit, QPushButton, QRadioButton, QSplitter, QStackedWidget, QStyle, QToolButton, QTreeView,
+    QVBoxLayout, QWidget,
 )
 
 from . import __version__, transfer
 from .cli import planned_records, write_private_file
 from .client import ServiceUnavailable, request
-from .clientpin import pin_problem
+from .clientpin import MAX_PIN_RETRIES, pin_problem
 
 APP_ID = "org.localpasskey.Manager"
 REFRESH_MS = 5000
@@ -122,6 +122,54 @@ def monogram(text: str, size: int, ratio: float) -> QPixmap:
     painter.setFont(font)
     painter.setPen(QColor(PALETTE.COLOR_TEXT_1))
     painter.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, text[:1].upper())
+    painter.end()
+    return pixmap
+
+
+PIN_PURPOSE = (
+    "Browsers ask for the security key PIN before they list or delete these passkeys in their "
+    "security-key settings, such as chrome://settings/securityKeys. It stays on this computer, "
+    "is never sent to websites, and is not your login password."
+)
+
+
+def pin_summary(pin) -> str:
+    """One sentence on the PIN state from a ``pin status`` reply, or None if unknown."""
+    if pin is None:
+        return None
+    if not pin["set"]:
+        return "No security key PIN is set. Browsers need one before they can list or delete these passkeys."
+    if pin["retries"] == 0:
+        return "The security key PIN is locked after too many wrong attempts. Set a new PIN to unlock it."
+    if pin["retries"] < MAX_PIN_RETRIES:
+        left = pin["retries"]
+        return f"A security key PIN is set. {left} wrong attempt{'s' if left != 1 else ''} left before it locks."
+    return "A security key PIN is set."
+
+
+def lock_pixmap(closed: bool, color: str, size: int, ratio: float) -> QPixmap:
+    """A padlock, closed or with its shackle open; no icon theme ships one that suits the dark style."""
+    pixmap = QPixmap(round(size * ratio), round(size * ratio))
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color), size * 0.12)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    left, right = size * 0.3, size * 0.7
+    top = size * (0.16 if closed else 0.06)  # an open shackle sits higher, free on the right
+    middle = top + (right - left) / 2
+    shackle = QPainterPath()
+    shackle.moveTo(left, size * 0.48)
+    shackle.lineTo(left, middle)
+    shackle.arcTo(QRectF(left, top, right - left, right - left), 180, -180)
+    if closed:
+        shackle.lineTo(right, size * 0.48)
+    painter.drawPath(shackle)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawRoundedRect(QRectF(size * 0.16, size * 0.45, size * 0.68, size * 0.5), size * 0.08, size * 0.08)
     painter.end()
     return pixmap
 
@@ -348,7 +396,8 @@ class Feedback(QLabel):
 
 
 class PinDialog(QDialog):
-    """Set or remove the PIN browsers ask for before they list or delete passkeys."""
+    """Set, change or remove the security key PIN browsers ask for before they
+    list or delete passkeys."""
 
     def __init__(self, window):
         super().__init__(window)
@@ -357,8 +406,8 @@ class PinDialog(QDialog):
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.why = QLabel(
-            "Browsers ask for this PIN in their security-key settings to list or delete "
-            "the passkeys stored on this computer."
+            PIN_PURPOSE + " Signing in to websites still uses the usual confirmation dialog. "
+            "If you forget the PIN, set a new one here: your passkeys are kept."
         )
         self.why.setTextFormat(Qt.TextFormat.PlainText)
         self.why.setWordWrap(True)
@@ -367,7 +416,7 @@ class PinDialog(QDialog):
         self.repeat = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
         form = QFormLayout()
         form.addRow("New PIN", self.pin)
-        form.addRow("Repeat", self.repeat)
+        form.addRow("Confirm", self.repeat)
         self.feedback = Feedback()
         self.set_button = QPushButton("Set PIN")
         self.set_button.clicked.connect(lambda: self._request("set"))
@@ -399,7 +448,7 @@ class PinDialog(QDialog):
     def _sync(self, *_):
         problem = pin_problem(self.pin.text(), self.repeat.text())
         if problem is None and not self.repeat.text():
-            problem = "Repeat the PIN"  # never green while Set PIN is still greyed out
+            problem = "Confirm the PIN"  # never green while Set PIN is still greyed out
         self.feedback.show_problem(problem, "PIN is valid")
         self.set_button.setEnabled(problem is None and not self.busy)
 
@@ -407,9 +456,8 @@ class PinDialog(QDialog):
         self.busy = False
         self.set = is_set
         self.retries = retries
-        self.status.setText(
-            f"A PIN is set ({retries} attempts left)." if is_set else "No PIN is set."
-        )
+        self.status.setText(pin_summary({"set": is_set, "retries": retries}))
+        self.set_button.setText("Change PIN" if is_set else "Set PIN")
         for widget in (self.pin, self.repeat):
             widget.setEnabled(True)
         self.remove_button.setEnabled(is_set)
@@ -419,7 +467,7 @@ class PinDialog(QDialog):
         if error is not None:
             # The state is unknown, not "no PIN set": inventing one would offer
             # to set a PIN over an existing one and hide Remove PIN.
-            self.status.setText("Could not read the PIN state.")
+            self.status.setText("Could not check whether a security key PIN is set.")
             self.window._error(error)
             return
         self.show_state(result["set"], result["retries"])
@@ -612,7 +660,10 @@ class Window(QMainWindow):
 
         self.count_label = QLabel()
         self.service_label = QLabel()
+        self.pin_button = QToolButton(autoRaise=True, visible=False)
+        self.pin_button.clicked.connect(self.show_pin_dialog)
         self.statusBar().addWidget(self.count_label)
+        self.statusBar().addPermanentWidget(self.pin_button)
         self.statusBar().addPermanentWidget(self.service_label)
 
         self._build_menus()
@@ -699,7 +750,12 @@ class Window(QMainWindow):
             payload = {"command": "list"}
             if trashed:
                 payload["trash"] = True
-            return status, request(payload)["credentials"]
+            creds = request(payload)["credentials"]
+            try:
+                pin = request({"command": "pin", "action": "status"})
+            except Exception:
+                pin = None  # the lock just stays hidden; the list is what matters
+            return status, creds, pin
 
         self.tasks.run(load, lambda result, error: self._on_loaded(result, error, trashed))
 
@@ -712,11 +768,13 @@ class Window(QMainWindow):
             self.count_label.setText("")
             self.service_label.setText("Service not running" if isinstance(error, ServiceUnavailable) else str(error))
             self.service_label.setToolTip(str(error))
+            self.show_pin_state(None)
             if self._creds is not None or self.side.currentWidget() is self.message:
                 self._creds = None
                 self._rebuild()
             return
-        status, creds = result
+        status, creds, pin = result
+        self.show_pin_state(pin)
         self.count_label.setText(f"{len(creds)} passkey{'s' if len(creds) != 1 else ''}")
         self.service_label.setText("Service running")
         self.service_label.setToolTip(
@@ -726,6 +784,20 @@ class Window(QMainWindow):
             self._trash = trashed
             self._creds = creds
             self._rebuild()
+
+    def show_pin_state(self, pin):
+        """The lock in the status bar: closed when a PIN is set, red when it is locked."""
+        summary = pin_summary(pin)
+        self.pin_button.setVisible(summary is not None)
+        if summary is None:
+            return
+        if not pin["set"]:
+            closed, color = False, PALETTE.COLOR_TEXT_3
+        else:
+            closed, color = True, Feedback.BAD if pin["retries"] == 0 else Feedback.GOOD
+        self.pin_button.setIcon(QIcon(lock_pixmap(closed, color, 16, self.devicePixelRatioF())))
+        self.pin_button.setToolTip(f"{summary}\n\n{PIN_PURPOSE}\n\nClick to set, change or remove it.")
+        self.pin_button.setAccessibleName(summary)
 
     def _rebuild(self):
         selected = self._selected_id
@@ -1059,6 +1131,7 @@ class Window(QMainWindow):
 
     def show_pin_dialog(self):
         PinDialog(self).exec()
+        self.refresh()  # the lock in the status bar follows a change at once
 
     def _about(self):
         QMessageBox.about(

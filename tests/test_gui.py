@@ -114,7 +114,8 @@ class PinDialogTests(unittest.TestCase):
         self.type("1234", "1234")
         self.assertFalse(self.dialog.set_button.isEnabled())
         self.dialog.show_state(True, 5)
-        self.assertEqual(self.dialog.status.text(), "A PIN is set (5 attempts left).")
+        self.assertEqual(self.dialog.status.text(), "A security key PIN is set. 5 wrong attempts left before it locks.")
+        self.assertEqual(self.dialog.set_button.text(), "Change PIN")
         self.assertTrue(self.dialog.set_button.isEnabled())
 
     def test_feedback_names_the_first_problem_on_every_keystroke(self):
@@ -126,7 +127,7 @@ class PinDialogTests(unittest.TestCase):
             ("123", "999", "At least 4 characters", red),
             ("a" * 64, "", "At most 63 bytes", red),
             ("12\x0034", "", "No NUL characters", red),
-            ("1234", "", "Repeat the PIN", red),
+            ("1234", "", "Confirm the PIN", red),
             ("1234", "12", "The PINs do not match", red),
             ("1234", "1234", "PIN is valid", green),
             ("äöüß", "äöüß", "PIN is valid", green),

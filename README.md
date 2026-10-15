@@ -203,12 +203,18 @@ refused while a newer passkey for the same account on the same site exists,
 since the site would then have two live passkey IDs for one account; delete
 the newer one first.
 
-A **PIN** is a second lock on the stored passkeys, the one browsers ask for in
-their security-key settings before they list or delete anything. Set one with
+A **security key PIN** is a second lock on the stored passkeys, the one
+browsers ask for in their security-key settings before they list or delete
+anything. It stays on this computer, is never sent to websites, and is not
+your login password; signing in to websites does not need it. Set one with
 `localpasskey pin set`, look at it with `localpasskey pin status` (which also
 shows how many attempts are left), and drop it with `localpasskey pin remove`.
-Only a hash is stored, and the PIN alone never deletes a passkey: every change
-still asks for your password.
+In the window, the lock at the bottom right shows it: open when no PIN is set,
+closed when one is, red when it is locked after too many wrong attempts. Hover
+over it for details, or click it to set, change or remove the PIN. If you
+forget the PIN, just set a new one: your passkeys are kept. Only a hash is
+stored, and the PIN alone never deletes a passkey: every change still asks for
+your password.
 
 In the window, *View → Show Trash* (Ctrl+T) switches the list to the trash,
 with restore and permanent deletion there; the Passkey menu also moves all

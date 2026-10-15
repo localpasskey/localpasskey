@@ -98,6 +98,23 @@ class WindowTests(unittest.TestCase):
     def summaries(self):
         return sorted(cred["site"] for cred in self.window._creds)
 
+    def test_status_bar_lock_shows_the_security_key_pin_state(self):
+        button = self.window.pin_button
+        self.assertFalse(button.isHidden())
+        self.assertTrue(button.toolTip().startswith("No security key PIN is set."))
+        self.assertIn("not your login password", button.toolTip())
+        self.server.pins.set(self.uid, self.username, b"1234")
+        self.window.refresh()
+        self.wait_for(lambda: button.toolTip().startswith("A security key PIN is set."))
+        self.assertEqual(button.accessibleName(), "A security key PIN is set.")
+        state = self.server.store.pin(self.uid, self.username)
+        self.server.store.set_pin(self.uid, self.username, PinState(hash=state.hash, retries=0))
+        self.window.refresh()
+        self.wait_for(lambda: "locked" in button.toolTip())
+        self.server.stop()
+        self.window.refresh()
+        self.wait_for(lambda: button.isHidden())  # unknown state: no lock rather than a wrong one
+
     def test_window_loads_over_socket_and_keyboard_search_selects_visible_result(self):
         self.assertEqual(self.window.count_label.text(), "7 passkeys")
         self.assertEqual(self.window.service_label.text(), "Service running")
@@ -383,8 +400,8 @@ class WindowTests(unittest.TestCase):
 
         def inspect(dialog):
             seen.append(dialog)
-            self.wait_for(lambda: "A PIN is set" in dialog.status.text() or "No PIN is set" in dialog.status.text())
-            self.assertEqual(dialog.status.text(), "No PIN is set.")
+            self.wait_for(lambda: "security key PIN" in dialog.status.text())
+            self.assertEqual(dialog.status.text(), gui.pin_summary({"set": False, "retries": MAX_PIN_RETRIES}))
             self.assertFalse(dialog.remove_button.isEnabled())
             self.assertFalse(dialog.set_button.isEnabled())
             QTest.keyClicks(dialog.pin, "1234")
@@ -394,7 +411,7 @@ class WindowTests(unittest.TestCase):
             QTest.keyClick(dialog.repeat, Qt.Key.Key_Backspace)
             self.assertTrue(dialog.set_button.isEnabled())
             QTest.mouseClick(dialog.set_button, Qt.MouseButton.LeftButton)
-            self.wait_for(lambda: dialog.status.text() == f"A PIN is set ({MAX_PIN_RETRIES} attempts left).")
+            self.wait_for(lambda: dialog.status.text() == "A security key PIN is set.")
             self.assertTrue(dialog.remove_button.isEnabled())
             self.assertEqual(dialog.pin.text(), "")
             self.assertEqual(dialog.repeat.text(), "")
@@ -402,7 +419,7 @@ class WindowTests(unittest.TestCase):
             self.assertEqual(state.hash, pin_hash(b"1234"))
             self.assertEqual(state.retries, MAX_PIN_RETRIES)
             QTest.mouseClick(dialog.remove_button, Qt.MouseButton.LeftButton)
-            self.wait_for(lambda: dialog.status.text() == "No PIN is set.")
+            self.wait_for(lambda: dialog.status.text() == gui.pin_summary({"set": False, "retries": MAX_PIN_RETRIES}))
             self.assertIsNone(self.server.store.pin(self.uid, self.username))
             dialog.reject()
 
@@ -429,7 +446,7 @@ class WindowTests(unittest.TestCase):
 
         def inspect(dialog):
             self.wait_for(lambda: dialog.status.text() != "Checking…")
-            self.assertEqual(dialog.status.text(), "Could not read the PIN state.")
+            self.assertEqual(dialog.status.text(), "Could not check whether a security key PIN is set.")
             for widget in (dialog.pin, dialog.repeat, dialog.set_button, dialog.remove_button):
                 self.assertFalse(widget.isEnabled(), "the state is unknown, so nothing is offered")
             self.assertIn("not running", self.window.statusBar().currentMessage())
@@ -442,13 +459,13 @@ class WindowTests(unittest.TestCase):
 
     def test_pin_dialog_reports_a_too_short_pin(self):
         def inspect(dialog):
-            self.wait_for(lambda: dialog.status.text() == "No PIN is set.")
+            self.wait_for(lambda: dialog.status.text() == gui.pin_summary({"set": False, "retries": MAX_PIN_RETRIES}))
             QTest.keyClicks(dialog.pin, "123")
             QTest.keyClicks(dialog.repeat, "123")
             self.assertEqual(dialog.feedback.text(), "At least 4 characters")
             self.assertFalse(dialog.set_button.isEnabled())
             QTest.mouseClick(dialog.set_button, Qt.MouseButton.LeftButton)
-            self.assertEqual(dialog.status.text(), "No PIN is set.")
+            self.assertEqual(dialog.status.text(), gui.pin_summary({"set": False, "retries": MAX_PIN_RETRIES}))
             dialog.reject()
 
         self.answer_dialog(inspect)

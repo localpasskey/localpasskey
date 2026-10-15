@@ -112,7 +112,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cli.main(["pin", "set"]), 0)
         self.assertEqual(getpass.call_args_list[0].args, ("New PIN: ",))
         self.assertEqual(request.call_args.args[0], {"command": "pin", "action": "set", "pin": "1234"})
-        self.assertEqual(output.getvalue().strip(), "PIN set.")
+        self.assertEqual(output.getvalue().strip(), "Security key PIN set.")
 
         with (
             patch("localpasskey.cli.getpass.getpass", side_effect=["1234", "4321"]),
@@ -130,7 +130,7 @@ class CliTests(unittest.TestCase):
             contextlib.redirect_stdout(io.StringIO()) as output,
         ):
             self.assertEqual(cli.main(["pin", "status"]), 0)
-        self.assertEqual(output.getvalue().strip(), "A PIN is set (7 attempts left).")
+        self.assertEqual(output.getvalue().strip(), "A security key PIN is set (7 attempts left).")
 
         with (
             patch("localpasskey.cli.request",
@@ -138,7 +138,7 @@ class CliTests(unittest.TestCase):
             contextlib.redirect_stdout(io.StringIO()) as output,
         ):
             self.assertEqual(cli.main(["pin", "status"]), 0)
-        self.assertEqual(output.getvalue().strip(), "No PIN is set.")
+        self.assertEqual(output.getvalue().strip(), "No security key PIN is set. Browsers need one to list or delete passkeys.")
 
         with (
             patch("localpasskey.cli.request", return_value={"ok": True}) as request,
@@ -147,7 +147,7 @@ class CliTests(unittest.TestCase):
         ):
             self.assertEqual(cli.main(["pin", "remove"]), 0)
         self.assertEqual(request.call_args.args[0], {"command": "pin", "action": "remove"})
-        self.assertEqual(output.getvalue().strip(), "PIN removed.")
+        self.assertEqual(output.getvalue().strip(), "Security key PIN removed.")
 
     def test_list_prints_the_trash_with_its_own_columns(self):
         trashed = {
@@ -236,17 +236,17 @@ class CliProcessTests(unittest.TestCase):
     def test_pin_status_set_and_remove(self):
         result = self.run_cli("pin", "status")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "No PIN is set.")
+        self.assertEqual(result.stdout.strip(), "No security key PIN is set. Browsers need one to list or delete passkeys.")
         result = self.run_cli("pin", "set", input="1234\n1234\n")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("PIN set.", result.stdout)
+        self.assertIn("Security key PIN set.", result.stdout)
         result = self.run_cli("pin", "status")
-        self.assertIn("A PIN is set (8 attempts left).", result.stdout)
+        self.assertIn("A security key PIN is set (8 attempts left).", result.stdout)
         result = self.run_cli("pin", "remove")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("PIN removed.", result.stdout)
+        self.assertIn("Security key PIN removed.", result.stdout)
         result = self.run_cli("pin", "status")
-        self.assertEqual(result.stdout.strip(), "No PIN is set.")
+        self.assertEqual(result.stdout.strip(), "No security key PIN is set. Browsers need one to list or delete passkeys.")
 
     def test_denied_delete_preserves_all_credentials(self):
         if os.getuid() == 0:
