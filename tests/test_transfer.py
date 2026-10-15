@@ -145,6 +145,134 @@ class RealKdfTests(unittest.TestCase):
         self.assertEqual(len(transfer.load(json.dumps(doc).encode(), lambda: PASSPHRASE)), 1)
 
 
+class CxfTests(unittest.TestCase):
+    def test_round_trip_every_algorithm(self):
+        records = [make_record(alg, cred_protect=1) for alg in cose.SUPPORTED_ALGORITHMS]
+        data = transfer.export_cxf(records, now=1760486400)
+        self.assertEqual(transfer.detect_format(data), "cxf")
+        doc = json.loads(data)
+        self.assertEqual(doc["version"], {"major": 1, "minor": 0})
+        self.assertEqual(doc["accounts"][0]["collections"], [])
+        cred = doc["accounts"][0]["items"][0]["credentials"][0]
+        self.assertEqual(cred["type"], "passkey")
+        self.assertEqual(cred["key"], records[0]["private_key"])
+        loaded = transfer.load(data, self.fail)
+        self.assertEqual(loaded.format, "cxf")
+        self.assertEqual(loaded, records)
+
+    def test_spec_example_with_other_items_and_skips(self):
+        good = make_record()
+        doc = {
+            "version": {"major": 1, "minor": 0}, "exporterRpId": "exporter.example",
+            "exporterDisplayName": "Exporter", "timestamp": 1760486400,
+            "accounts": [{
+                "id": "DZSXp7iBQY-Fg-OofakQtQ", "username": "", "email": "", "collections": [],
+                "items": [
+                    {"id": "AA", "title": "Example", "creationAt": 1760486400, "unknownField": 1,
+                     "credentials": [
+                         {"type": "basic-auth", "username": {"fieldType": "string", "value": "x"}},
+                         {"type": "passkey", "credentialId": good["id"], "rpId": "example.com",
+                          "username": "alice", "userDisplayName": "Alice",
+                          "userHandle": good["user_id"] + "==", "key": good["private_key"],
+                          "fido2Extensions": {"payments": False}},
+                     ]},
+                    {"id": "AB", "title": "Broken", "credentials": [
+                        {"type": "passkey", "credentialId": "AQ", "rpId": "broken.example",
+                         "username": "bob", "userDisplayName": "", "userHandle": "",
+                         "key": b64encode(b"not a key")},
+                    ]},
+                ],
+            }],
+        }
+        loaded = transfer.load(json.dumps(doc).encode(), self.fail)
+        self.assertEqual(loaded, [dict(good, rp_name="Example", cred_protect=1)])
+        self.assertEqual(loaded.skipped, [{
+            "credential": transfer.describe({"rp_id": "broken.example", "rp_name": "Broken", "user_name": "bob"}),
+            "reason": "the private key cannot be read",
+        }])
+
+    def test_unsupported_version(self):
+        doc = json.loads(transfer.export_cxf([make_record()]))
+        doc["version"]["major"] = 2
+        with self.assertRaises(TransferError):
+            transfer.load(json.dumps(doc).encode(), self.fail)
+
+
+def bitwarden_credential(record, **overrides):
+    cred = {
+        "credentialId": "b64." + record["id"], "keyType": "public-key", "keyAlgorithm": "ECDSA",
+        "keyCurve": "P-256", "keyValue": record["private_key"], "rpId": record["rp_id"],
+        "userHandle": record["user_id"], "userName": record["user_name"], "counter": "0",
+        "rpName": record["rp_name"], "userDisplayName": record["user_display_name"],
+        "discoverable": "true", "creationDate": "2025-10-15T00:00:00.000Z",
+    }
+    cred.update(overrides)
+    return cred
+
+
+def bitwarden_export(*creds, **top):
+    item = {
+        "id": "6a1b4b8e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "organizationId": None, "folderId": None,
+        "type": 1, "reprompt": 0, "name": "Example item", "notes": None, "favorite": False,
+        "login": {"uris": [{"match": None, "uri": "https://example.com"}], "username": "login-user",
+                  "password": None, "totp": None, "fido2Credentials": list(creds)},
+        "collectionIds": None, "revisionDate": "2025-10-15T00:00:00.000Z",
+        "creationDate": "2025-10-15T00:00:00.000Z", "deletedDate": None,
+    }
+    note = {"id": "x", "type": 2, "name": "A note", "secureNote": {"type": 0}}
+    doc = {"encrypted": False, "folders": [], "items": [item, note]}
+    doc.update(top)
+    return json.dumps(doc).encode()
+
+
+class BitwardenTests(unittest.TestCase):
+    def test_import(self):
+        guid_record = make_record(id=b64encode(bytes(range(16))), cred_protect=1, created=1760486400.0)
+        b64_record = make_record(cred_protect=1, created=1760486400.0)
+        data = bitwarden_export(
+            bitwarden_credential(guid_record, credentialId="00010203-0405-0607-0809-0a0b0c0d0e0f",
+                                 creationDate="2025-10-15T00:00:00.000Z"),
+            bitwarden_credential(b64_record, discoverable="false", creationDate="2025-10-15T00:00:00+00:00",
+                                 userName=None, rpName=None, userHandle=None),
+        )
+        self.assertEqual(transfer.detect_format(data), "bitwarden")
+        loaded = transfer.load(data, self.fail)
+        self.assertEqual(loaded.format, "bitwarden")
+        self.assertEqual(loaded.skipped, [])
+        self.assertEqual(loaded[0], dict(guid_record))
+        self.assertEqual(loaded[1], dict(
+            b64_record, discoverable=False, user_id="", user_name="login-user", rp_name="Example item",
+        ))
+
+    def test_bad_passkeys_skipped(self):
+        record = make_record()
+        data = bitwarden_export(
+            bitwarden_credential(record, credentialId="not-a-guid"),
+            bitwarden_credential(record, keyValue="!!"),
+            bitwarden_credential(record, rpId=""),
+            bitwarden_credential(record, creationDate="yesterday"),
+        )
+        loaded = transfer.load(data, self.fail)
+        self.assertEqual([s["reason"] for s in loaded.skipped], [
+            "the credential ID is neither a UUID nor b64.-prefixed",
+            "the private key is not base64url",
+            "invalid site",
+        ])
+        self.assertEqual(loaded[0]["created"], 0.0)
+
+    def test_encrypted_exports_refused(self):
+        protected = json.dumps({
+            "encrypted": True, "passwordProtected": True, "salt": "AAAA", "kdfType": 0,
+            "kdfIterations": 600000, "encKeyValidation_DO_NOT_EDIT": "2.x", "data": "2.y",
+        }).encode()
+        account = json.dumps({"encrypted": True, "encKeyValidation_DO_NOT_EDIT": "2.x", "items": []}).encode()
+        for data, words in ((protected, "password protected"), (account, "Bitwarden account")):
+            with self.assertRaises(TransferError) as caught:
+                transfer.load(data, self.fail)
+            self.assertIn(words, str(caught.exception))
+            self.assertIn("unencrypted JSON", str(caught.exception))
+
+
 class PassphraseProblemTests(unittest.TestCase):
     def test_cases(self):
         cases = [

@@ -16,7 +16,10 @@ import binascii
 import json
 import os
 import re
+import time
 import unicodedata
+import uuid
+from datetime import datetime
 from typing import Callable, List, Optional
 
 from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
@@ -157,14 +160,14 @@ def _record(*, cred_id: bytes, rp_id, user_id: bytes, private_key: bytes, rp_nam
     }
 
 
-def _collect(entries, convert, format) -> Records:
+def _collect(entries, convert, format, peek=None) -> Records:
     """Convert every entry, keeping the ones that fail as skipped."""
     result = Records(format=format)
     for entry in entries:
         try:
             result.append(convert(entry))
         except _Skip as e:
-            result.skipped.append({"credential": describe(_peek(entry)), "reason": str(e)})
+            result.skipped.append({"credential": describe((peek or _peek)(entry)), "reason": str(e)})
     return result
 
 
@@ -267,30 +270,177 @@ def _from_backup(data) -> dict:
     )
 
 
+# --- FIDO Credential Exchange Format (CXF 1.0) -----------------------------
+# Unencrypted by design (CXF leaves confidentiality to its transport, CXP).
+# CXF has no algorithm, discoverable or credProtect field: the algorithm comes
+# from the key, and imported passkeys are discoverable with credProtect 1.
+
+CXF_EXPORTER_RP_ID = "localpasskey.invalid"
+
+
+def export_cxf(records: List[dict], now: Optional[float] = None) -> bytes:
+    """An unencrypted CXF document holding ``records``."""
+    timestamp = int(time.time() if now is None else now)
+    items = []
+    for rec in records:
+        created = int(rec.get("created") or timestamp)
+        items.append({
+            "id": b64encode(os.urandom(16)),
+            "creationAt": created,
+            "modifiedAt": created,
+            "title": rec.get("rp_name") or rec["rp_id"],
+            "credentials": [{
+                "type": "passkey",
+                "credentialId": rec["id"],
+                "rpId": rec["rp_id"],
+                "username": rec.get("user_name", ""),
+                "userDisplayName": rec.get("user_display_name", ""),
+                "userHandle": rec["user_id"],
+                "key": rec["private_key"],
+            }],
+        })
+    doc = {
+        "version": {"major": 1, "minor": 0},
+        "exporterRpId": CXF_EXPORTER_RP_ID,
+        "exporterDisplayName": "LocalPasskey",
+        "timestamp": timestamp,
+        "accounts": [{
+            "id": b64encode(os.urandom(16)), "username": "", "email": "",
+            "collections": [], "items": items,
+        }],
+    }
+    return json.dumps(doc, indent=1).encode() + b"\n"
+
+
+def _cxf_passkeys(doc: dict):
+    version = doc.get("version")
+    if not isinstance(version, dict) or version.get("major") != 1:
+        raise TransferError("This CXF file has an unsupported version")
+    for account in doc.get("accounts") or []:
+        items = account.get("items") if isinstance(account, dict) else None
+        for item in items if isinstance(items, list) else []:
+            creds = item.get("credentials") if isinstance(item, dict) else None
+            for cred in creds if isinstance(creds, list) else []:
+                if isinstance(cred, dict) and cred.get("type") == "passkey":
+                    yield item, cred
+
+
+def _from_cxf(entry) -> dict:
+    item, cred = entry
+    return _record(
+        cred_id=_binary(cred.get("credentialId"), "the credential ID"), rp_id=cred.get("rpId"),
+        user_id=_binary(cred.get("userHandle"), "the user ID"),
+        private_key=_binary(cred.get("key"), "the private key"),
+        rp_name=item.get("title"), user_name=cred.get("username"),
+        user_display_name=cred.get("userDisplayName"), created=item.get("creationAt"),
+    )
+
+
+def _peek_cxf(entry) -> dict:
+    item, cred = entry
+    return {"rp_id": cred.get("rpId"), "rp_name": item.get("title"), "user_name": cred.get("username")}
+
+
+# --- Bitwarden unencrypted JSON export --------------------------------------
+
+
+def _bitwarden_passkeys(doc: dict):
+    if doc.get("encrypted") is True:
+        if doc.get("passwordProtected") is True:
+            raise TransferError(
+                "This Bitwarden export is password protected. Export the vault again "
+                "from Bitwarden as unencrypted JSON (.json) and import that file"
+            )
+        raise TransferError(
+            "This Bitwarden export is encrypted with your Bitwarden account. Export the "
+            "vault again from Bitwarden as unencrypted JSON (.json) and import that file"
+        )
+    items = doc.get("items")
+    if not isinstance(items, list):
+        raise TransferError("This Bitwarden export has no items")
+    for item in items:
+        login = item.get("login") if isinstance(item, dict) else None
+        creds = login.get("fido2Credentials") if isinstance(login, dict) else None
+        for cred in creds if isinstance(creds, list) else []:
+            if isinstance(cred, dict):
+                yield item, cred
+
+
+def _bitwarden_id(text) -> bytes:
+    if isinstance(text, str) and text.startswith("b64."):
+        return _binary(text[4:], "the credential ID")
+    try:
+        return uuid.UUID(text).bytes
+    except (TypeError, ValueError, AttributeError):
+        raise _Skip("the credential ID is neither a UUID nor b64.-prefixed") from None
+
+
+def _iso_time(text) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _from_bitwarden(entry) -> dict:
+    item, cred = entry
+    login = item["login"]
+    handle = cred.get("userHandle")
+    return _record(
+        cred_id=_bitwarden_id(cred.get("credentialId")), rp_id=cred.get("rpId"),
+        user_id=b"" if handle in (None, "") else _binary(handle, "the user ID"),
+        private_key=_binary(cred.get("keyValue"), "the private key"),
+        rp_name=cred.get("rpName") or item.get("name"),
+        user_name=cred.get("userName") or login.get("username"),
+        user_display_name=cred.get("userDisplayName"),
+        discoverable=cred.get("discoverable") in ("true", True),
+        created=_iso_time(cred.get("creationDate")),
+    )
+
+
+def _peek_bitwarden(entry) -> dict:
+    item, cred = entry
+    return {"rp_id": cred.get("rpId"), "rp_name": cred.get("rpName") or item.get("name"),
+            "user_name": cred.get("userName")}
+
+
 # --- Reading any supported file --------------------------------------------
+
+_NOT_SUPPORTED = "This is not a LocalPasskey backup, a CXF file or a Bitwarden JSON export"
 
 
 def _parse(data: bytes) -> dict:
     try:
         doc = json.loads(data.decode("utf-8-sig"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         doc = None
     if not isinstance(doc, dict):
-        raise TransferError("This is not a LocalPasskey backup")
+        raise TransferError(_NOT_SUPPORTED)
     return doc
 
 
-def detect_format(data: bytes) -> str:
-    """"localpasskey" (encrypted, needs a passphrase)."""
-    doc = _parse(data)
+def _format_of(doc: dict) -> str:
     if doc.get("format") == BACKUP_FORMAT:
         return "localpasskey"
-    raise TransferError("This is not a LocalPasskey backup")
+    if "exporterRpId" in doc and "accounts" in doc:
+        return "cxf"
+    if "items" in doc or doc.get("encrypted") is True:
+        return "bitwarden"
+    raise TransferError(_NOT_SUPPORTED)
+
+
+def detect_format(data: bytes) -> str:
+    """"localpasskey" (encrypted, needs a passphrase), "cxf" or "bitwarden"."""
+    return _format_of(_parse(data))
 
 
 def load(data: bytes, passphrase_callback: Callable[[], str]) -> Records:
     """The passkeys in a file of any supported format. ``passphrase_callback``
     is only called for encrypted backups."""
     doc = _parse(data)
-    detect_format(data)
-    return _load_backup(doc, passphrase_callback)
+    kind = _format_of(doc)
+    if kind == "localpasskey":
+        return _load_backup(doc, passphrase_callback)
+    if kind == "cxf":
+        return _collect(list(_cxf_passkeys(doc)), _from_cxf, kind, _peek_cxf)
+    return _collect(list(_bitwarden_passkeys(doc)), _from_bitwarden, kind, _peek_bitwarden)
