@@ -11,17 +11,21 @@ localpasskey (0.3.0) unstable; urgency=medium
     keystroke what is wrong, or that the PIN is valid.
   * Feature: an optional Chrome/Chromium extension with the
     localpasskey-bridge native messaging host, so sites asking for a passkey
-    "on this device" reach LocalPasskey; the confirmation dialog names the
-    browser for these requests.
+    "on this device" reach LocalPasskey. While it is on, every Chrome/Chromium
+    passkey request goes to LocalPasskey: no other security keys, phones,
+    Google Password Manager passkeys or passkey autofill, and requests fail
+    if the service is not running. The confirmation dialog names the browser
+    for these requests. python3-fido2, which only the bridge needs, is now
+    recommended.
   * Change: one localpasskey package now includes the window
     (localpasskey-gui); its Qt libraries are hard dependencies, and the
-    package Breaks, Replaces and Provides localpasskey-gui, so upgrading
-    removes the old package.
+    package Conflicts with, Replaces and Provides localpasskey-gui, so
+    upgrading removes the old package.
   * Fix: a PIN/UV MAC test failed about once in 256 runs.
   * Docs: README troubleshooting for Google's "Create a passkey" versus "Use
     another device".
 
- -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Thu, 15 Oct 2026 12:00:00 +0000
+ -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Thu, 15 Oct 2026 03:55:00 +0000
 
 localpasskey (0.2.0) unstable; urgency=medium
 

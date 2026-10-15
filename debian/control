@@ -32,7 +32,7 @@ Depends:
 Recommends:
  polkit-1-auth-agent,
  python3-fido2,
-Breaks:
+Conflicts:
  localpasskey-gui (<< ${binary:Version}),
 Replaces:
  localpasskey-gui (<< ${binary:Version}),
