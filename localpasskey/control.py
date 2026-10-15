@@ -35,13 +35,15 @@ from .clientpin import MAX_PIN_BYTES, MIN_PIN_LENGTH, PIN_POLICY_VIOLATION, PinE
 from .ctap2 import MAX_CREDENTIAL_ID_LENGTH, MAX_LABEL_LENGTH, MAX_USER_ID_LENGTH, Verdict, _label
 from .notify import ACTIVITY
 from .polkit import ACTION_EXPORT, ACTION_MANAGE, process_subject
-from .store import Credential, StoreError, b64decode, b64encode
+from .store import MAX_CREDENTIALS_PER_USER, Credential, StoreError, b64decode, b64encode
 
 log = logging.getLogger(__name__)
 
 MAX_REQUEST = 16 * 1024 * 1024  # An import of 4096 RSA passkeys fits in one request.
 MIN_ID_PREFIX = 4
 MAX_RP_ID_LENGTH = 253  # the longest DNS name
+READERS_PER_UID = 2  # each reader may hold MAX_REQUEST bytes and their parsed JSON
+MAX_RSA_BITS = 4096  # loading a bigger key costs seconds of CPU with the GIL held
 _B64URL = re.compile(r"[A-Za-z0-9_-]*={0,2}")
 
 
@@ -86,7 +88,7 @@ def _key_matches(key, alg) -> bool:
         return isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1)
     if alg == cose.EDDSA:
         return isinstance(key, ed25519.Ed25519PrivateKey)
-    return isinstance(key, rsa.RSAPrivateKey) and key.key_size >= 2048
+    return isinstance(key, rsa.RSAPrivateKey) and 2048 <= key.key_size <= MAX_RSA_BITS
 
 
 def _parse_record(index, data, store, uid) -> Credential:
@@ -164,6 +166,12 @@ class ControlServer:
         self.notifier = notifier
         self.pins = pins or PinManager(store)
         self._sock = None
+        self._slots = {}  # uid -> limits on that caller's concurrent work
+
+    def _slot(self, uid):
+        # setdefault is atomic, so concurrent connections of one uid share one slot.
+        return self._slots.setdefault(uid, SimpleNamespace(
+            readers=threading.BoundedSemaphore(READERS_PER_UID), importing=threading.Lock()))
 
     def start(self):
         try:
@@ -206,13 +214,19 @@ class ControlServer:
             try:
                 pid, uid, _ = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
                 conn.settimeout(10)
-                with conn.makefile("rb") as stream:
-                    data = stream.readline(MAX_REQUEST + 1)
-                if len(data) > MAX_REQUEST or not data.endswith(b"\n"):
-                    return
+                with self._slot(uid).readers:
+                    with conn.makefile("rb") as stream:
+                        data = stream.readline(MAX_REQUEST + 1)
+                    if len(data) > MAX_REQUEST or not data.endswith(b"\n"):
+                        return
+                    try:
+                        request, error = json.loads(data), None
+                    except ValueError as e:
+                        request, error = None, {"ok": False, "error": f"bad request: {e}"}
+                    del data
                 conn.settimeout(None)
                 try:
-                    response = self.handle(json.loads(data), pid, uid)
+                    response = error or self.handle(request, pid, uid)
                 except (ControlError, StoreError) as e:
                     response = {"ok": False, "error": str(e)}
                 except (ValueError, TypeError, AttributeError) as e:
@@ -320,7 +334,11 @@ class ControlServer:
             raise ControlError("credentials must be a list")
         if "dry_run" in request and not isinstance(request["dry_run"], bool):
             raise ControlError("invalid dry_run flag")
-        creds = [_parse_record(i, data, self.store, target_uid) for i, data in enumerate(records)]
+        if len(records) > MAX_CREDENTIALS_PER_USER:
+            raise ControlError(f"at most {MAX_CREDENTIALS_PER_USER} passkeys can be imported at once")
+        # Loading keys is CPU-bound and runs before any prompt: one import at a time per caller.
+        with self._slot(uid).importing:
+            creds = [_parse_record(i, data, self.store, target_uid) for i, data in enumerate(records)]
         imported, skipped = self.store.import_credentials(target_uid, username, creds, dry_run=True)
         if imported and not request.get("dry_run"):
             count = len(imported)

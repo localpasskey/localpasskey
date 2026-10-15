@@ -477,6 +477,18 @@ class ControlTests(unittest.TestCase):
             self.handle({"command": "import", "credentials": [
                 self.normalized(alg=cose.RS256, private_key=b64encode(cose.private_key_to_bytes(small)))]})
 
+    def test_import_refuses_oversized_rsa_keys_and_too_many_records(self):
+        big = rsa.generate_private_key(public_exponent=65537, key_size=4160)
+        with self.assertRaisesRegex(ControlError, "not a valid RS256 key"):
+            self.handle({"command": "import", "dry_run": True, "credentials": [
+                self.normalized(alg=cose.RS256, private_key=b64encode(cose.private_key_to_bytes(big)))]})
+        records = [self.normalized(rp_id=f"site{n}.example", id=b"id%d" % n) for n in range(3)]
+        with patch("localpasskey.control.MAX_CREDENTIALS_PER_USER", 2), \
+                patch("localpasskey.control._parse_record") as parse:
+            with self.assertRaisesRegex(ControlError, "at most 2 passkeys"):
+                self.handle({"command": "import", "dry_run": True, "credentials": records})
+        parse.assert_not_called()
+
     def test_import_accepts_every_algorithm(self):
         for alg in cose.SUPPORTED_ALGORITHMS:
             with self.subTest(alg=alg):
@@ -603,6 +615,23 @@ class ControlTests(unittest.TestCase):
                     self.assertEqual(json.loads(reply), {"ok": True, "version": "test"})
                 else:
                     self.assertEqual(reply, b"")
+
+    def test_a_caller_has_a_bounded_number_of_requests_being_read(self):
+        self.server.start()
+        readers = self.server._slot(os.getuid()).readers
+        for _ in range(2):
+            readers.acquire()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.3)
+            sock.connect(self.server.path)
+            sock.sendall(b'{"command": "status"}\n')
+            with self.assertRaises(socket.timeout):
+                sock.recv(1)
+            readers.release()
+            sock.settimeout(2)
+            with sock.makefile("rb") as stream:
+                self.assertEqual(json.loads(stream.readline()), {"ok": True, "version": "test"})
+        readers.release()
 
     def test_client_round_trip_and_errors(self):
         self.server.start()
