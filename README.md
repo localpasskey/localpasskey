@@ -150,12 +150,54 @@ still asks for your password.
 
 In the window, *View → Show Trash* (Ctrl+T) switches the list to the trash,
 with restore and permanent deletion there; the Passkey menu also moves all
-passkeys for a website, or all of them, at once; and *File → Security Key PIN…*
-sets or removes the PIN.
+passkeys for a website, or all of them, at once; *File → Security Key PIN…*
+sets or removes the PIN; and *File → Export Passkeys…* and *Import Passkeys…*
+write and read backups (see below).
+
+## Backing up and moving passkeys
+
+```sh
+localpasskey export passkeys.lpkbackup            # all passkeys, encrypted
+localpasskey export github.lpkbackup --site github.com
+localpasskey import passkeys.lpkbackup            # on this or another computer
+localpasskey import bitwarden_export.json         # Bitwarden's unencrypted JSON export
+```
+
+`export` writes a **LocalPasskey backup**: the passkeys, private keys
+included, encrypted with AES-256-GCM under a key derived from a passphrase you
+type twice (at least 8 characters; scrypt, so a guess costs time and memory).
+The file is created readable by you only and is never overwritten without
+`--force`. Because the private keys leave the protected store, exporting asks
+for your password through polkit (action `org.localpasskey.export`). Keep the
+file and the passphrase apart: whoever has both can sign in as you. A
+forgotten passphrase cannot be recovered. The trash is never exported.
+
+`import` reads a LocalPasskey backup (asking for its passphrase), a FIDO
+**Credential Exchange Format** (CXF) file, or **Bitwarden**'s *unencrypted*
+JSON export (`.json`, not the password-protected or account-encrypted kinds,
+which are refused). It shows what it will import and what it skips and why,
+then asks for your password. A passkey is skipped when it is already here
+(also in the trash), when a passkey for the same account on the same site
+exists, or when it appears twice in the file. The file is read and decrypted
+by the command as you; the service only receives the passkeys, checks them
+again and seals them for this computer and your user.
+
+`localpasskey export FILE --format cxf --unencrypted` writes a CXF file for
+other password managers. CXF files are **not encrypted**: anyone who can read
+one has your passkeys, so delete it as soon as it has been imported. The
+window only writes encrypted backups. CXF has no field for "security key"
+(non-discoverable) passkeys or credProtect, so they come back as ordinary
+passkeys.
+
+The signature counter: LocalPasskey always reports 0. Sites accept that,
+unless they have seen a non-zero counter for the passkey before. A passkey
+imported from Bitwarden or another manager that counted may therefore be
+refused by a site that checks counters; register a new passkey there instead.
 
 ## Security model
 
-* Private keys never leave the root-only directory `/var/lib/localpasskey`.
+* Private keys never leave the root-only directory `/var/lib/localpasskey`,
+  except in an export you asked for and authenticated.
   They are also sealed with AES-256-GCM under `master.key`, and each sealed
   key is bound to its owner's uid. Processes running as you can *ask* to use a
   passkey but cannot copy one, and every use needs your password in the
@@ -165,9 +207,10 @@ sets or removes the PIN.
   all zeros, and the signature counter is always 0. A moving counter would let
   a site link several accounts you hold there, because the account chooser
   signs for all of them.
-* Passkeys are device-bound: no sync, no cloud. Back up
-  `/var/lib/localpasskey` (including `master.key`) if you need to, and keep the
-  backup safe; whoever has it can use the passkeys.
+* Passkeys are device-bound: no sync, no cloud. `localpasskey export` makes an
+  encrypted, passphrase-protected backup (it asks for your password first), and
+  you can also back up `/var/lib/localpasskey` (including `master.key`). Keep
+  either backup safe; whoever has it can use the passkeys.
 * The polkit action `org.localpasskey.authenticate` defaults to `auth_self`.
   Never relax it to `yes` in a polkit rule: any website could then use your
   passkeys silently.

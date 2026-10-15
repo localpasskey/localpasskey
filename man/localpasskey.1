@@ -1,6 +1,6 @@
 .TH LOCALPASSKEY 1 "October 2026" "localpasskey 0.2.0" "User Commands"
 .SH NAME
-localpasskey \- list, restore and delete the passkeys stored on this computer
+localpasskey \- list, restore, delete, export and import the passkeys stored on this computer
 .SH SYNOPSIS
 .B localpasskey list
 .RB [ \-\-trash ]
@@ -35,6 +35,24 @@ localpasskey \- list, restore and delete the passkeys stored on this computer
 .BR status | set | remove
 .RB [ \-\-user
 .IR user ]
+.br
+.B localpasskey export
+.I file
+.RI [ ID ...]
+.RB [ \-\-site
+.IR site " | " \-\-all ]
+.RB [ \-\-format
+.BR localpasskey | cxf ]
+.RB [ \-\-unencrypted ]
+.RB [ \-\-force ]
+.RB [ \-\-user
+.IR user ]
+.br
+.B localpasskey import
+.I file
+.RB [ \-\-user
+.IR user ]
+.RB [ \-y ]
 .br
 .B localpasskey status
 .SH DESCRIPTION
@@ -123,6 +141,53 @@ reads the new PIN twice without echoing it;
 forgets it. Only a hash of the PIN is stored, and the PIN on its own never
 deletes a passkey: passkey changes always ask for your password.
 .TP
+.B export
+Write passkeys to
+.IR file :
+all live passkeys by default, or those given by
+.IR ID ,
+.B \-\-site
+or
+.BR \-\-all ,
+as with
+.BR delete .
+Passkeys in the trash are never exported. The command shows what it will
+export, reads a passphrase twice without echoing it (at least 8 characters),
+and then polkit asks for your password. The file is a LocalPasskey backup:
+the private keys, encrypted with AES-256-GCM under a key derived from the
+passphrase with scrypt. Whoever has the file and the passphrase can sign in
+as you; a forgotten passphrase cannot be recovered. The file is created with
+mode 0600, and an existing file is only replaced with
+.BR \-\-force .
+.IP
+.B \-\-format cxf
+writes the FIDO Alliance Credential Exchange Format instead, which other
+password managers read. CXF is not encrypted, so it also needs
+.BR \-\-unencrypted ,
+and the command warns: anyone who can read the file has the passkeys.
+CXF cannot say that a passkey is a security key (non-discoverable) or carry
+its credProtect level; such passkeys come back as ordinary passkeys.
+.TP
+.B import
+Add the passkeys in
+.IR file ,
+which may be a LocalPasskey backup (the command asks for its passphrase, and
+again if it was wrong), a CXF file, or the unencrypted JSON export of
+Bitwarden. Password-protected and account-encrypted Bitwarden exports are
+refused; export again as unencrypted JSON. The command lists what it will
+import and what it skips, with the reason, and asks for confirmation (skip
+with
+.BR \-y )
+before polkit asks for your password. A passkey is skipped when it is
+already on this computer (also in the trash), when a passkey for the same
+account on the same site exists, when it appears twice in the file, when it
+cannot be read, or when the store is full. The file is read and decrypted by
+this command as you; the service only receives the passkeys, checks them,
+and seals them for your user on this computer.
+.IP
+LocalPasskey always reports a signature counter of 0. A site that has seen a
+non-zero counter for an imported passkey may refuse it.
+.TP
 .B status
 Check that the service is running and show the virtual device node.
 .SH EXAMPLES
@@ -140,6 +205,14 @@ $ localpasskey purge 3f9a
 Type "github.com" to permanently delete this passkey. This cannot be undone.
 > github.com
 Permanently deleted the passkey for github.com.
+$ localpasskey export passkeys.lpkbackup
+Passphrase for the backup:
+Repeat the passphrase:
+Exported 3 passkeys to passkeys.lpkbackup.
+$ localpasskey import passkeys.lpkbackup
+Passphrase of the backup:
+Import these 2 passkeys? [y/N] y
+Imported 2 passkeys.
 .fi
 .SH SEE ALSO
 .BR localpasskeyd (8),

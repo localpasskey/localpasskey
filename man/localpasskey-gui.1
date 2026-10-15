@@ -48,6 +48,27 @@ changes still asks for your password. The command-line equivalent is
 .B localpasskey pin
 in
 .BR localpasskey (1).
+.SH BACKUPS
+.B Export Passkeys\[u2026]
+in the File menu writes an encrypted LocalPasskey backup of all your
+passkeys, or of those for the selected website. Type a passphrase twice; the
+line below the fields says what is still wrong with it, and Export stays
+disabled until it is at least 8 characters long and both fields match. After
+you choose where to save the file (readable by you only), the service asks
+for your password. Whoever has the file and the passphrase can sign in as
+you. The window never writes unencrypted files; see
+.B localpasskey export \-\-format cxf
+in
+.BR localpasskey (1)
+for that.
+.PP
+.B Import Passkeys\[u2026]
+opens a LocalPasskey backup, a CXF file or an unencrypted Bitwarden JSON
+export. It asks for the passphrase only for a backup, then lists what will be
+imported and what is skipped and why: already on this computer (also in the
+trash), another passkey for the same account, or twice in the file.
+.B Import
+then asks for your password.
 .SH KEYBOARD SHORTCUTS
 .TP
 Ctrl+F
