@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from fido2.server import Fido2Server
-from fido2.utils import websafe_decode, websafe_encode
+from fido2.utils import sha256, websafe_decode, websafe_encode
 from fido2.webauthn import (
     AttestationObject,
     AuthenticatorData,
@@ -139,7 +139,7 @@ class OriginTests(unittest.TestCase):
         self.assertEqual(details["extensions"], {"credProps": True})
 
     def test_local_http_origins_for_testing(self):
-        for origin in ("http://localhost:8765", "http://127.0.0.1:8765", "https://login.example.com:8443"):
+        for origin in ("http://localhost:8765", "https://login.example.com:8443"):
             self.assertEqual(self.origin(override(origin)), origin)
 
     def test_refused(self):
@@ -149,6 +149,7 @@ class OriginTests(unittest.TestCase):
             {"remoteDesktopClientOverride": {"origin": ORIGIN}},
             override(same=False),
             override("http://example.com"),
+            override("http://127.0.0.1:8765"),
             override("http://localhost.example.com"),
             override("chrome-extension://abc"),
             override("https://example.com/path"),
@@ -289,14 +290,20 @@ class BridgeFlowTests(unittest.TestCase):
         reply = self.run_bridge("create", create_details(b"c" * 32, algs=(-35,)))
         self.assertEqual(reply["error"]["name"], "NotSupportedError")
 
+    def test_related_origin_chromium_accepted_is_served(self):
+        details = create_details(b"c" * 32)
+        details["extensions"] = override("https://www.example.co.uk")
+        created = self.run_bridge("create", details)
+        client_data = CollectedClientData(websafe_decode(created["response"]["clientDataJSON"]))
+        self.assertEqual(client_data.origin, "https://www.example.co.uk")
+        auth_data = AuthenticatorData(websafe_decode(created["response"]["authenticatorData"]))
+        self.assertEqual(auth_data.rp_id_hash, sha256(b"example.com"))
+
     def test_failures_are_not_allowed_without_request_data(self):
         details = get_details(b"secret-challenge-bytes", allow=[b"nope"])
         reply = self.run_bridge("get", details)
         self.assertEqual(reply, {"error": {"name": NOT_ALLOWED, "message": bridge.NOT_ALLOWED[1]}})
         self.assertNotIn(details["challenge"], json.dumps(reply))
-
-        wrong_rp = get_details(b"c" * 32, rp_id="other.com")
-        self.assertEqual(self.run_bridge("get", wrong_rp)["error"]["name"], NOT_ALLOWED)
 
         self.h.verifier.verdict = Verdict.DENIED
         self.assertEqual(self.run_bridge("create", create_details(b"c" * 32))["error"]["name"], NOT_ALLOWED)

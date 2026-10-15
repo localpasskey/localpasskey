@@ -23,7 +23,7 @@ on this device (\fBauthenticatorAttachment: "platform"\fR) are answered too,
 which is the reason for the bridge: without it Chrome refuses them on Linux.
 .PP
 The website's origin is taken from the browser, which checked it against the
-site's rp ID. The bridge checks the rp ID again and refuses origins that are
+site's rp ID, related origins included. The bridge refuses origins that are
 not https (other than http://localhost) and requests from cross-origin
 iframes. Errors reach the page as a generic
 .BR NotAllowedError ,

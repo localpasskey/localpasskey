@@ -10,8 +10,10 @@ Requests are {"type": "status"}, answered with {"available": bool}, and
 {"type": "create" | "get", "requestDetailsJson": "..."}, answered with
 {"responseJson": "..."} or {"error": {"name": ..., "message": ...}}. The
 ceremony runs on the LocalPasskey virtual key through python-fido2, which
-builds clientDataJSON for the origin the browser verified and checks the rp ID
-against it again. Closing stdin cancels a running ceremony.
+builds clientDataJSON for the origin the browser verified. The rp ID is not
+checked again: Chromium already did, including Related Origin Requests
+(/.well-known/webauthn), which python-fido2 cannot check. Closing stdin
+cancels a running ceremony.
 """
 
 from __future__ import annotations
@@ -31,7 +33,6 @@ from fido2.client import ClientError, Fido2Client
 from fido2.ctap import CtapError
 from fido2.ctap2.extensions import CredPropsExtension, CredProtectExtension
 from fido2.hid import CtapHidDevice, list_descriptors, open_connection
-from fido2.rpid import verify_rp_id
 from fido2.utils import websafe_decode, websafe_encode
 from fido2.webauthn import PublicKeyCredentialCreationOptions, PublicKeyCredentialRequestOptions
 
@@ -43,7 +44,7 @@ log = logging.getLogger(__name__)
 MAX_MESSAGE = 1024 * 1024
 # Chromium's JSON names; python-fido2 reads the same names for credProtect.
 CREATE_EXTENSIONS = ("credProps", "credentialProtectionPolicy", "enforceCredentialProtectionPolicy")
-LOCAL_ORIGINS = ("localhost", "127.0.0.1")  # http allowed for testing, like browsers do
+LOCAL_ORIGINS = ("localhost",)  # http allowed for testing, like browsers do
 
 NOT_ALLOWED = ("NotAllowedError", "The operation either timed out or was not allowed.")
 ERRORS = {
@@ -248,8 +249,10 @@ def ceremony(kind, details_json, cancel, open_device=open_device):
         raise Refused("request is not an object")
     origin = request_origin(details)
     options = creation_options(details) if kind == "create" else request_options(details)
+    # Chromium checked the rp ID against the origin, related origins included.
     client = Fido2Client(
-        open_device(), origin, verify=verify_rp_id, extension_types=[CredPropsExtension, CredProtectExtension]
+        open_device(), origin, verify=lambda rp_id, origin: True,
+        extension_types=[CredPropsExtension, CredProtectExtension],
     )
     if kind == "create":
         return creation_response(client.make_credential(options, event=cancel), details)
