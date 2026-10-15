@@ -189,6 +189,17 @@ service after changes. Logs: `journalctl -u localpasskey`.
 
 ## Troubleshooting
 
+* **Google says a passkey "can't be created on this device" (or "is not
+  supported for this device"):** on myaccount.google.com → *Passkeys*, the
+  main *Create a passkey* button asks the browser for a *platform*
+  authenticator (`authenticatorAttachment: "platform"`). Chromium never sends
+  such a request to a USB key, so LocalPasskey never sees it. Choose *Use
+  another device* (also shown as *Use a different device*) instead: that
+  request allows security keys, and LocalPasskey answers it. Browsers that
+  report Windows or macOS, or claim a built-in authenticator, make *Create a
+  passkey* look like the right choice even though it cannot work here. Don't
+  use *Add security key* under 2-Step Verification either; that enrols a
+  second factor, not a passkey.
 * **No dialog appears / "Passkey request blocked" notification:** a polkit
   authentication agent must run in your session. GNOME, KDE, MATE, Cinnamon,
   LXQt and Xfce set this up. On bare window managers, start one such as
