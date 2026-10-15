@@ -1,3 +1,28 @@
+localpasskey (0.3.0) unstable; urgency=medium
+
+  * Feature: export and import passkeys (CLI `export`/`import`, window File
+    menu). Exports are encrypted LocalPasskey backups (.lpkbackup) by
+    default; an unencrypted FIDO CXF file only with `--format cxf
+    --unencrypted`. Import reads LocalPasskey backups, CXF and Bitwarden's
+    unencrypted JSON export, shows what will be imported, and skips and
+    reports passkeys that conflict with existing ones. Exporting asks for
+    your password through the new org.localpasskey.export polkit action.
+  * Feature: the PIN dialog (and the export passphrase) says on every
+    keystroke what is wrong, or that the PIN is valid.
+  * Feature: an optional Chrome/Chromium extension with the
+    localpasskey-bridge native messaging host, so sites asking for a passkey
+    "on this device" reach LocalPasskey; the confirmation dialog names the
+    browser for these requests.
+  * Change: one localpasskey package now includes the window
+    (localpasskey-gui); its Qt libraries are hard dependencies, and the
+    package Breaks, Replaces and Provides localpasskey-gui, so upgrading
+    removes the old package.
+  * Fix: a PIN/UV MAC test failed about once in 256 runs.
+  * Docs: README troubleshooting for Google's "Create a passkey" versus "Use
+    another device".
+
+ -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Thu, 15 Oct 2026 12:00:00 +0000
+
 localpasskey (0.2.0) unstable; urgency=medium
 
   * Feature: deleting moves passkeys to a trash; restore them or permanently
