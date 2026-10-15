@@ -174,6 +174,27 @@ class PinManagerTestCase(unittest.TestCase):
         self.manager.set(UID, USERNAME, b"a" * 63)
         self.manager.set(UID, USERNAME, "äöüß".encode())
 
+    def test_pin_problem_names_the_first_problem(self):
+        cases = [
+            ("", None, "Enter a PIN"),
+            ("123", "1234", "At least 4 characters"),
+            ("a" * 64, None, "At most 63 bytes"),
+            ("ä" * 32, None, "At most 63 bytes"),  # 32 code points, 64 bytes
+            ("12\x0034", None, "No NUL characters"),
+            ("1234", "1235", "The PINs do not match"),
+            ("1234", "", None),  # the repeat is only compared once it is typed
+            ("1234", None, None),
+            ("1234", "1234", None),
+            ("a" * 63, None, None),
+        ]
+        for pin, repeat, problem in cases:
+            with self.subTest(pin=pin, repeat=repeat):
+                self.assertEqual(clientpin.pin_problem(pin, repeat), problem)
+
+    def test_set_uses_pin_problem(self):
+        with self.assertRaisesRegex(PinError, "At least 4 characters"):
+            self.manager.set(UID, USERNAME, b"abc")
+
     def test_unicode_length_is_counted_in_code_points(self):
         # Four two-byte characters are 8 bytes but only 4 code points.
         self.manager.set(UID, USERNAME, "äöüß".encode())

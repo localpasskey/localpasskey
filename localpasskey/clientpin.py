@@ -58,6 +58,25 @@ def pin_hash(pin: bytes) -> bytes:
     return hashlib.sha256(pin).digest()[:16]
 
 
+def pin_problem(pin: str, repeat: Optional[str] = None) -> Optional[str]:
+    """The first reason ``pin`` is not acceptable, or None if it is.
+
+    The daemon and the window both use this, so they cannot disagree. ``repeat``
+    is the confirmation field, only compared once something is typed into it.
+    """
+    if not pin:
+        return "Enter a PIN"
+    if len(pin) < MIN_PIN_LENGTH:
+        return f"At least {MIN_PIN_LENGTH} characters"
+    if len(pin.encode("utf-8", "surrogatepass")) > MAX_PIN_BYTES:
+        return f"At most {MAX_PIN_BYTES} bytes"
+    if "\0" in pin:
+        return "No NUL characters"
+    if repeat and repeat != pin:
+        return "The PINs do not match"
+    return None
+
+
 def _hkdf(secret: bytes, info: bytes) -> bytes:
     return HKDF(
         algorithm=hashes.SHA256(), length=32, salt=bytes(32), info=info
@@ -218,12 +237,9 @@ class PinManager:
             text = pin.decode("utf-8")
         except UnicodeDecodeError:
             raise PinError(PIN_POLICY_VIOLATION, "the PIN must be valid UTF-8") from None
-        if len(text) < MIN_PIN_LENGTH:
-            raise PinError(PIN_POLICY_VIOLATION, f"the PIN must be at least {MIN_PIN_LENGTH} characters")
-        if len(pin) > MAX_PIN_BYTES:
-            raise PinError(PIN_POLICY_VIOLATION, f"the PIN must be at most {MAX_PIN_BYTES} bytes")
-        if "\0" in text:
-            raise PinError(PIN_POLICY_VIOLATION, "the PIN must not contain NUL")
+        problem = pin_problem(text)
+        if problem is not None:
+            raise PinError(PIN_POLICY_VIOLATION, problem)
         with self._lock:
             self.store.set_pin(uid, username, PinState(hash=pin_hash(pin), retries=MAX_PIN_RETRIES))
             self._mismatches[uid] = 0
