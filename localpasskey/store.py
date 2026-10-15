@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -261,6 +261,50 @@ class CredentialStore:
                 raise StoreFull(f"uid {uid} already has {len(creds)} credentials")
             creds.append(cred)
             self._write(uid, username, creds)
+
+    def import_credentials(
+        self, uid: int, username: str, creds: Iterable[Credential], dry_run: bool = False
+    ) -> Tuple[List[Credential], List[Tuple[Credential, str]]]:
+        """Add ``creds`` in one write, skipping each one that would clash.
+
+        Returns ``(imported, skipped)``; skipped entries carry a reason. Unlike
+        ``add`` nothing is replaced: an ID already known (live or trashed), a
+        live discoverable passkey for the same account, or a duplicate within
+        ``creds`` itself is skipped, and so is anything beyond the capacity.
+        ``dry_run`` plans without writing."""
+        with self._lock:
+            stored = self._read(uid, username)
+            live_ids = {c.id for c in stored if c.deleted is None}
+            trashed_ids = {c.id for c in stored if c.deleted is not None}
+            accounts = {(c.rp_id, c.user_id) for c in stored if c.deleted is None and c.discoverable}
+            seen_ids, seen_accounts = set(), set()
+            imported, skipped = [], []
+            for cred in creds:
+                account = (cred.rp_id, cred.user_id)
+                if cred.id in seen_ids:
+                    reason = "duplicate in the file"
+                elif cred.id in live_ids:
+                    reason = "already on this computer"
+                elif cred.id in trashed_ids:
+                    reason = "in the trash on this computer"
+                elif cred.discoverable and account in accounts:
+                    reason = "a passkey for this account already exists"
+                elif cred.discoverable and account in seen_accounts:
+                    reason = "another passkey in the file is for the same account"
+                elif len(stored) + len(imported) >= MAX_CREDENTIALS_PER_USER:
+                    reason = "store full"
+                else:
+                    reason = None
+                seen_ids.add(cred.id)
+                if reason is not None:
+                    skipped.append((cred, reason))
+                    continue
+                if cred.discoverable:
+                    seen_accounts.add(account)
+                imported.append(cred)
+            if imported and not dry_run:
+                self._write(uid, username, stored + imported)
+            return imported, skipped
 
     def record_use(self, uid: int, username: str, cred_id: bytes) -> None:
         """Remember when a live credential was last used."""

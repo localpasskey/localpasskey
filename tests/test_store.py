@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from localpasskey import cose
+from localpasskey import store as store_module
 from localpasskey.store import (
     Credential,
     CredentialStore,
@@ -115,6 +116,67 @@ class StoreTests(unittest.TestCase):
                 loaded = CredentialStore(self.dir).credentials(1000, "alice")[-1]
                 restored = cose.private_key_from_bytes(self.store.unseal(1000, loaded))
                 self.assertEqual(cose.public_key(restored, alg), cose.public_key(key, alg))
+
+    def test_import_adds_new_credentials_in_one_write(self):
+        creds = [self.credential(1000, user_id=b"u1"), self.credential(1000, user_id=b"u2")]
+        with patch("localpasskey.store._write_file", wraps=store_module._write_file) as write:
+            imported, skipped = self.store.import_credentials(1000, "alice", creds)
+        self.assertEqual((imported, skipped), (creds, []))
+        self.assertEqual(write.call_count, 1)
+        self.assertEqual(CredentialStore(self.dir).credentials(1000, "alice"), creds)
+
+    def test_import_skips_every_kind_of_conflict(self):
+        live = self.credential(1000, user_id=b"live")
+        trashed = self.credential(1000, user_id=b"gone")
+        self.store.add(1000, "alice", live)
+        self.store.add(1000, "alice", trashed)
+        self.store.remove(1000, "alice", [trashed.id])
+        new = self.credential(1000, user_id=b"new")
+        same_id_live = replace(self.credential(1000, user_id=b"x1"), id=live.id)
+        same_id_trash = replace(self.credential(1000, user_id=b"x2"), id=trashed.id)
+        same_account = self.credential(1000, user_id=b"live")
+        duplicate = replace(self.credential(1000, user_id=b"x3"), id=new.id)
+        same_account_in_file = self.credential(1000, user_id=b"new")
+        # Non-discoverable passkeys never clash by account, and a trashed
+        # account does not block a new one (as with add).
+        nondiscoverable = self.credential(1000, user_id=b"live", discoverable=False)
+        trashed_account = self.credential(1000, user_id=b"gone")
+        incoming = [new, same_id_live, same_id_trash, same_account, duplicate,
+                    same_account_in_file, nondiscoverable, trashed_account]
+
+        plan = self.store.import_credentials(1000, "alice", incoming, dry_run=True)
+        self.assertEqual(len(self.store.credentials(1000, "alice")), 1, "a dry run writes nothing")
+        imported, skipped = self.store.import_credentials(1000, "alice", incoming)
+        self.assertEqual((imported, skipped), plan)
+        self.assertEqual(imported, [new, nondiscoverable, trashed_account])
+        self.assertEqual(skipped, [
+            (same_id_live, "already on this computer"),
+            (same_id_trash, "in the trash on this computer"),
+            (same_account, "a passkey for this account already exists"),
+            (duplicate, "duplicate in the file"),
+            (same_account_in_file, "another passkey in the file is for the same account"),
+        ])
+        self.assertEqual(self.store.credentials(1000, "alice"), [live] + imported)
+        self.assertEqual([c.id for c in self.store.trash(1000, "alice")], [trashed.id])
+
+    def test_import_stops_at_capacity_counting_the_trash(self):
+        trashed = self.credential(1000, user_id=b"gone")
+        self.store.add(1000, "alice", trashed)
+        self.store.remove(1000, "alice", [trashed.id])
+        creds = [self.credential(1000, user_id=b"u%d" % n) for n in range(3)]
+        with patch("localpasskey.store.MAX_CREDENTIALS_PER_USER", 3):
+            imported, skipped = self.store.import_credentials(1000, "alice", creds)
+        self.assertEqual(imported, creds[:2])
+        self.assertEqual(skipped, [(creds[2], "store full")])
+
+    def test_import_of_nothing_new_leaves_the_file_alone(self):
+        cred = self.credential(1000)
+        self.store.add(1000, "alice", cred)
+        path = Path(self.dir, "users", "1000", "credentials.json")
+        before = path.stat().st_mtime_ns
+        self.assertEqual(self.store.import_credentials(1000, "alice", [cred]),
+                         ([], [(cred, "already on this computer")]))
+        self.assertEqual(path.stat().st_mtime_ns, before)
 
     def test_reused_uid_does_not_inherit_passkeys(self):
         self.store.add(1000, "alice", self.credential(1000))
