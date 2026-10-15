@@ -152,8 +152,9 @@ or
 as with
 .BR delete .
 Passkeys in the trash are never exported. The command shows what it will
-export, reads a passphrase twice without echoing it (at least 8 characters),
-and then polkit asks for your password. The file is a LocalPasskey backup:
+export, asks twice for a new passphrase that encrypts the file (at least 8
+characters, not echoed; it is not your login password), and then polkit asks
+for your login password to allow the export. The file is a LocalPasskey backup:
 the private keys, encrypted with AES-256-GCM under a key derived from the
 passphrase with scrypt. Whoever has the file and the passphrase can sign in
 as you; a forgotten passphrase cannot be recovered. The file is created with
@@ -207,11 +208,11 @@ Type "github.com" to permanently delete this passkey. This cannot be undone.
 > github.com
 Permanently deleted the passkey for github.com.
 $ localpasskey export passkeys.lpkbackup
-Passphrase for the backup:
-Repeat the passphrase:
+New passphrase to encrypt the export (not your login password):
+Confirm the passphrase:
 Exported 3 passkeys to passkeys.lpkbackup.
 $ localpasskey import passkeys.lpkbackup
-Passphrase of the backup:
+Passphrase this file was exported with:
 Import these 2 passkeys? [y/N] y
 Imported 2 passkeys.
 .fi

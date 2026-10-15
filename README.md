@@ -273,8 +273,8 @@ refused by a site that checks counters; register a new passkey there instead.
   all zeros, and the signature counter is always 0. A moving counter would let
   a site link several accounts you hold there, because the account chooser
   signs for all of them.
-* Passkeys are device-bound: no sync, no cloud. `localpasskey export` makes an
-  encrypted, passphrase-protected backup (it asks for your password first), and
+* Passkeys are device-bound: no sync, no cloud. `localpasskey export` makes a backup
+  encrypted with a passphrase you choose (then your login password allows it), and
   you can also back up `/var/lib/localpasskey` (including `master.key`). Keep
   either backup safe; whoever has it can use the passkeys.
 * The polkit action `org.localpasskey.authenticate` defaults to `auth_self`.

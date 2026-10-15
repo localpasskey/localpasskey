@@ -39,7 +39,7 @@ class ExportDialogTests(unittest.TestCase):
         cases = [
             ("", "", "Enter a passphrase to encrypt your export.", red),
             ("short", "", "At least 8 characters", red),
-            ("long enough", "", "Repeat the passphrase", red),
+            ("long enough", "", "Confirm the passphrase", red),
             ("long enough", "long", "The passphrases do not match", red),
             ("long enough", "long enough", "Passphrase is valid", green),
         ]
@@ -50,6 +50,11 @@ class ExportDialogTests(unittest.TestCase):
                 self.assertEqual(dialog.feedback.text(), text)
                 self.assertIn(colour, dialog.feedback.styleSheet())
                 self.assertEqual(dialog.export_button.isEnabled(), colour == green)
+
+    def test_says_the_passphrase_is_not_the_login_password(self):
+        dialog = gui.ExportDialog(self.parent)
+        self.assertIn("not your login password", dialog.intro.text())
+        self.assertIn("login password", dialog.next_step.text())
 
     def test_scope_is_the_selected_site_or_everything(self):
         dialog = gui.ExportDialog(self.parent, "github.com")

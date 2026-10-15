@@ -453,11 +453,18 @@ class ExportDialog(QDialog):
         super().__init__(window)
         self.setWindowTitle("Export Passkeys")
         intro = QLabel(
-            "The backup holds the private keys of your passkeys, encrypted with this passphrase. "
-            "Whoever has the file and the passphrase can sign in as you."
+            "Choose a new passphrase to encrypt the exported file. This is not your login "
+            "password: you will need this passphrase to import the file again, and nobody can "
+            "recover it if you forget it. Anyone with the file and the passphrase can sign in "
+            "as you."
         )
         intro.setTextFormat(Qt.TextFormat.PlainText)
         intro.setWordWrap(True)
+        self.next_step = QLabel("After you choose where to save the file, your login password is asked for to allow the export.")
+        self.next_step.setTextFormat(Qt.TextFormat.PlainText)
+        self.next_step.setWordWrap(True)
+        self.next_step.setStyleSheet(f"color: {PALETTE.COLOR_TEXT_3};")
+        self.intro = intro
         self.all = QRadioButton("All passkeys")
         self.site = QRadioButton(f"Passkeys for {site}" if site else "Passkeys for the selected website")
         self.site.setEnabled(bool(site))
@@ -469,8 +476,8 @@ class ExportDialog(QDialog):
         self.passphrase = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
         self.repeat = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
         form = QFormLayout()
-        form.addRow("Passphrase", self.passphrase)
-        form.addRow("Repeat", self.repeat)
+        form.addRow("Backup passphrase", self.passphrase)
+        form.addRow("Confirm", self.repeat)
         self.feedback = Feedback()
         buttons = QDialogButtonBox()
         self.export_button = buttons.addButton("Export…", QDialogButtonBox.ButtonRole.AcceptRole)
@@ -483,6 +490,7 @@ class ExportDialog(QDialog):
         layout.addWidget(self.site)
         layout.addLayout(form)
         layout.addWidget(self.feedback)
+        layout.addWidget(self.next_step)
         layout.addWidget(buttons)
         for field in (self.passphrase, self.repeat):
             field.textChanged.connect(self._sync)
@@ -491,7 +499,7 @@ class ExportDialog(QDialog):
     def _sync(self, *_):
         problem = transfer.passphrase_problem(self.passphrase.text(), self.repeat.text())
         if problem is None and not self.repeat.text():
-            problem = "Repeat the passphrase"
+            problem = "Confirm the passphrase"
         self.feedback.show_problem(problem, "Passphrase is valid")
         self.export_button.setEnabled(problem is None)
 
@@ -1007,7 +1015,9 @@ class Window(QMainWindow):
     def _load_import(self, data, encrypted, retry=False):
         passphrase = ""
         if encrypted:
-            label = "Wrong passphrase. Try again:" if retry else "Passphrase of the backup:"
+            label = "The passphrase this file was exported with (not your login password):"
+            if retry:
+                label = "Wrong passphrase. " + label
             passphrase, ok = QInputDialog.getText(self, "Import Passkeys", label, QLineEdit.EchoMode.Password)
             if not ok:
                 return

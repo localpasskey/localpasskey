@@ -233,9 +233,9 @@ def cmd_export(args):
         print("localpasskey: warning: the file will NOT be encrypted. Anyone who can read it can sign "
               "in as you on these sites.", file=sys.stderr)
     else:
-        passphrase = getpass.getpass("Passphrase for the backup: ")
+        passphrase = getpass.getpass("New passphrase to encrypt the export (not your login password): ")
         problem = transfer.passphrase_problem(passphrase)
-        if problem is None and passphrase != getpass.getpass("Repeat the passphrase: "):
+        if problem is None and passphrase != getpass.getpass("Confirm the passphrase: "):
             problem = "The passphrases do not match"
         if problem:
             raise CliError(problem[:1].lower() + problem[1:])
@@ -278,7 +278,7 @@ def cmd_import(args):
         raise CliError(f"cannot read {args.file}: {e.strerror or e}") from None
     for attempt in range(3):
         try:
-            records = transfer.load(data, lambda: getpass.getpass("Passphrase of the backup: "))
+            records = transfer.load(data, lambda: getpass.getpass("Passphrase this file was exported with: "))
             break
         except transfer.WrongPassphrase as e:
             if attempt == 2:

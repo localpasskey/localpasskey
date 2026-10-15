@@ -51,11 +51,12 @@ in
 .SH BACKUPS
 .B Export Passkeys\[u2026]
 in the File menu writes an encrypted LocalPasskey backup of all your
-passkeys, or of those for the selected website. Type a passphrase twice; the
-line below the fields says what is still wrong with it, and Export stays
-disabled until it is at least 8 characters long and both fields match. After
-you choose where to save the file (readable by you only), the service asks
-for your password. Whoever has the file and the passphrase can sign in as
+passkeys, or of those for the selected website. Choose a new backup
+passphrase and confirm it; it encrypts the file and is not your login
+password. The line below the fields says what is still wrong with it, and
+Export stays disabled until it is at least 8 characters long and both fields
+match. After you choose where to save the file (readable by you only), the
+service asks for your login password to allow the export. Whoever has the file and the passphrase can sign in as
 you. The window never writes unencrypted files; see
 .B localpasskey export \-\-format cxf
 in
