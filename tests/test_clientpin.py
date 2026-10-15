@@ -94,7 +94,7 @@ class CryptoTestCase(unittest.TestCase):
                 self.assertEqual(ours, protocol.authenticate(secret, message))
                 self.assertEqual(len(ours), 16 if version == 1 else 32)
                 self.assertTrue(clientpin.verify(version, secret, message, ours))
-                self.assertFalse(clientpin.verify(version, secret, message, ours[:-1] + b"\x00"))
+                self.assertFalse(clientpin.verify(version, secret, message, ours[:-1] + bytes([ours[-1] ^ 0xFF])))
 
     def test_bad_peer_keys_raise_value_error(self):
         good = self.manager.key_agreement()
