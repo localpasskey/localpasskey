@@ -4,12 +4,14 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from localpasskey import cli
+from localpasskey import cli, transfer
+from localpasskey.control import record
 from localpasskey.ctap2 import Verdict
 from localpasskey.store import MAX_CREDENTIALS_PER_USER
 from tests import test_control
@@ -283,6 +285,131 @@ class CliProcessTests(unittest.TestCase):
         result = self.run_cli("list", "--user", "root")
         self.assertEqual(result.returncode, 1)
         self.assertIn("only root", result.stderr)
+
+
+class CliTransferTests(unittest.TestCase):
+    """export and import end to end against the test control server, in this
+    process so that the passphrase prompts can be answered."""
+
+    PASSPHRASE = "correct horse"
+
+    def setUp(self):
+        self.fixture = test_control.ControlTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.fixture.server.start()
+        self.tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch("localpasskey.cli._start_tty_agent", return_value=None))
+
+    def run_cli(self, *args, passphrases=(), typed=()):
+        with (
+            patch("localpasskey.cli.getpass.getpass", side_effect=list(passphrases)) as getpass,
+            patch("localpasskey.cli.input", side_effect=list(typed), create=True),
+            contextlib.redirect_stdout(io.StringIO()) as out,
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
+            code = cli.main(["--socket", self.fixture.server.path, *args])
+        return code, out.getvalue(), err.getvalue(), getpass.call_count
+
+    def live(self):
+        return self.fixture.store.credentials(self.fixture.uid, self.fixture.name)
+
+    def test_backup_round_trip_skips_what_is_already_here(self):
+        path = os.path.join(self.tmp, "keys.lpkbackup")
+        code, out, err, asked = self.run_cli("export", path, passphrases=[self.PASSPHRASE] * 2)
+        self.assertEqual(code, 0, err)
+        self.assertIn("Exported 3 passkeys", out)
+        self.assertEqual(asked, 2)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.assertEqual(self.fixture.polkit.checks[-1][1], "org.localpasskey.export")
+        with open(path, "rb") as stream:
+            self.assertEqual(len(transfer.load(stream.read(), lambda: self.PASSPHRASE)), 3)
+
+        # Everything is still here: the plan skips all three and asks nothing.
+        checks = len(self.fixture.polkit.checks)
+        code, out, err, _ = self.run_cli("import", path, passphrases=[self.PASSPHRASE])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.count("already on this computer"), 3)
+        self.assertIn("Nothing to import.", out)
+        self.assertEqual(len(self.fixture.polkit.checks), checks)
+
+        # Purge them, then the backup brings them back, after a wrong passphrase.
+        ids = [c.id for c in self.live()]
+        self.fixture.store.remove(self.fixture.uid, self.fixture.name, ids)
+        self.fixture.store.purge(self.fixture.uid, self.fixture.name, ids)
+        code, out, err, asked = self.run_cli("import", path, passphrases=["wrong one", self.PASSPHRASE],
+                                             typed=["y"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Wrong passphrase", err)
+        self.assertEqual(asked, 2)
+        self.assertIn("Imported 3 passkeys.", out)
+        self.assertEqual(sorted(c.id for c in self.live()), sorted(ids))
+
+    def test_export_refuses_before_asking_the_daemon(self):
+        path = os.path.join(self.tmp, "keys.lpkbackup")
+        open(path, "w").close()
+        cases = [
+            (("export", path), [], "already exists"),
+            (("export", path + "2", "--format", "cxf"), [], "--unencrypted"),
+            (("export", path + "3", "--unencrypted"), [], "only --format cxf"),
+            (("export", path + "4"), ["short", "short"], "at least 8 characters"),
+            (("export", path + "5"), ["long enough", "different"], "the passphrases do not match"),
+        ]
+        for args, passphrases, message in cases:
+            with self.subTest(args=args):
+                code, _, err, _ = self.run_cli(*args, passphrases=passphrases)
+                self.assertEqual(code, 1)
+                self.assertIn(message, err)
+        self.assertEqual(self.fixture.polkit.checks, [])
+        self.assertEqual(sorted(os.listdir(self.tmp)), ["keys.lpkbackup"])
+
+    def test_unencrypted_cxf_export_warns_and_force_replaces(self):
+        path = os.path.join(self.tmp, "keys.json")
+        with open(path, "w") as stream:
+            stream.write("old")
+        os.chmod(path, 0o644)
+        code, out, err, asked = self.run_cli("export", path, "--site", "example.com", "--format", "cxf",
+                                             "--unencrypted", "--force")
+        self.assertEqual(code, 0, err)
+        self.assertIn("NOT be encrypted", err)
+        self.assertEqual(asked, 0)
+        self.assertIn("Exported 2 passkeys", out)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        with open(path, "rb") as stream:
+            records = transfer.load(stream.read(), lambda: self.fail("CXF has no passphrase"))
+        self.assertEqual(records.format, "cxf")
+        self.assertEqual({r["rp_id"] for r in records}, {"example.com"})
+
+    def test_import_reports_skips_and_cancel_imports_nothing(self):
+        fresh = self.fixture.normalized()
+        duplicate = dict(fresh)
+        existing = transfer.load(
+            transfer.export_cxf([cli_record(self.fixture, self.fixture.creds[0])]), lambda: "")[0]
+        path = os.path.join(self.tmp, "keys.lpkbackup")
+        with open(path, "wb") as stream:
+            stream.write(transfer.export_backup([fresh, duplicate, existing], self.PASSPHRASE))
+        code, out, err, _ = self.run_cli("import", path, passphrases=[self.PASSPHRASE], typed=["n"])
+        self.assertEqual(code, 1, err)
+        self.assertIn("duplicate in the file", out)
+        self.assertIn("already on this computer", out)
+        self.assertIn("Nothing imported.", out)
+        self.assertEqual(len(self.live()), 3)
+        code, out, err, _ = self.run_cli("import", path, "--yes", passphrases=[self.PASSPHRASE])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Imported 1 passkey.", out)
+        self.assertEqual(len(self.live()), 4)
+
+    def test_import_of_a_file_that_is_not_supported(self):
+        path = os.path.join(self.tmp, "notes.json")
+        with open(path, "w") as stream:
+            stream.write("[]")
+        code, _, err, _ = self.run_cli("import", path)
+        self.assertEqual(code, 1)
+        self.assertIn("not a LocalPasskey backup", err)
+
+
+def cli_record(fixture, cred):
+    return record(cred, fixture.store.unseal(fixture.uid, cred))
 
 
 if __name__ == "__main__":

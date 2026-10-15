@@ -1,7 +1,9 @@
-"""localpasskey: list, delete and restore the passkeys stored on this computer.
+"""localpasskey: list, delete, restore, export and import the passkeys stored
+on this computer.
 
 Deleting moves a passkey to the trash, where it can be restored; only ``purge``
-deletes one for good.
+deletes one for good. Export and import read and write files here, as the
+user: the daemon only ever sees normalized records.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import time
 
+from . import transfer
 from .client import ServiceError, request, socket_path
 
 
@@ -184,6 +187,122 @@ def cmd_pin(args):
     return 0
 
 
+def write_private_file(path, data, overwrite=False):
+    """Write ``data`` readable by the owner only. Without ``overwrite`` an
+    existing file is an error; with it, the old file is replaced atomically."""
+    if overwrite:
+        directory = os.path.dirname(os.path.abspath(path))
+        temporary = os.path.join(directory, f".{os.path.basename(path)}.{os.getpid()}.tmp")
+        _write_new(temporary, data)
+        try:
+            os.replace(temporary, path)
+        except OSError:
+            os.unlink(temporary)
+            raise
+    else:
+        _write_new(path, data)
+
+
+def _write_new(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+    except BaseException:
+        os.unlink(path)  # never leave half a backup behind
+        raise
+
+
+def _plural(count):
+    return f"{count} passkey{'s' if count != 1 else ''}"
+
+
+def cmd_export(args):
+    if args.format == "cxf" and not args.unencrypted:
+        raise CliError("CXF files are not encrypted: add --unencrypted if you really want one")
+    if args.unencrypted and args.format != "cxf":
+        raise CliError("only --format cxf writes an unencrypted file")
+    if os.path.lexists(args.file) and not args.force:
+        raise CliError(f"{args.file} already exists (use --force to replace it)")
+    if not (args.all or args.site or args.ids):
+        args.all = True
+    selector = _selector(args, "export")
+    chosen = request({**selector, "dry_run": True}, args.socket)["exported"]
+    _print_credentials(chosen)
+    if args.unencrypted:
+        print("localpasskey: warning: the file will NOT be encrypted. Anyone who can read it can sign "
+              "in as you on these sites.", file=sys.stderr)
+    else:
+        passphrase = getpass.getpass("Passphrase for the backup: ")
+        problem = transfer.passphrase_problem(passphrase)
+        if problem is None and passphrase != getpass.getpass("Repeat the passphrase: "):
+            problem = "The passphrases do not match"
+        if problem:
+            raise CliError(problem[:1].lower() + problem[1:])
+    # Send exactly the IDs shown above.
+    selector = _with_user({"command": "export", "ids": [cred["id"] for cred in chosen]}, args)
+    records = _ask(selector, args)["credentials"]
+    data = transfer.export_cxf(records) if args.unencrypted else transfer.export_backup(records, passphrase)
+    try:
+        write_private_file(args.file, data, overwrite=args.force)
+    except OSError as e:
+        raise CliError(f"cannot write {args.file}: {e.strerror or e}") from None
+    print(f"Exported {_plural(len(records))} to {args.file}.")
+    return 0
+
+
+def _print_skipped(skipped):
+    rows = [(s["credential"].get("id", "")[:12] or "-", s["credential"].get("site") or "-",
+             _account(s["credential"]), s["reason"]) for s in skipped]
+    _print_table(("ID", "SITE", "ACCOUNT", "SKIPPED BECAUSE"), rows)
+
+
+def cmd_import(args):
+    try:
+        with open(args.file, "rb") as stream:
+            data = stream.read()
+    except OSError as e:
+        raise CliError(f"cannot read {args.file}: {e.strerror or e}") from None
+    for attempt in range(3):
+        try:
+            records = transfer.load(data, lambda: getpass.getpass("Passphrase of the backup: "))
+            break
+        except transfer.WrongPassphrase as e:
+            if attempt == 2:
+                raise
+            print(f"localpasskey: {e}", file=sys.stderr)
+    plan = request(_with_user({"command": "import", "credentials": records, "dry_run": True}, args), args.socket)
+    skipped = records.skipped + plan["skipped"]
+    if plan["imported"]:
+        _print_credentials(plan["imported"])
+    if skipped:
+        if plan["imported"]:
+            print()
+        _print_skipped(skipped)
+    if not plan["imported"]:
+        print("Nothing to import.")
+        return 0
+    what = "this passkey" if len(plan["imported"]) == 1 else f"these {len(plan['imported'])} passkeys"
+    if not args.yes and input(f"Import {what}? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("Nothing imported.")
+        return 1
+    # Send only the passkeys the user saw in the plan.
+    wanted = {cred["id"] for cred in plan["imported"]}
+    chosen = []
+    for record in records:
+        cred_id = transfer.describe(record)["id"]
+        if cred_id in wanted:
+            wanted.discard(cred_id)  # a duplicate in the file was already reported as skipped
+            chosen.append(record)
+    result = _ask(_with_user({"command": "import", "credentials": chosen}, args), args)
+    late = len(result["skipped"])
+    print(f"Imported {_plural(len(result['imported']))}"
+          + (f"; {late} could no longer be imported:" if late else "."))
+    if late:
+        _print_skipped(result["skipped"])
+    return 0
+
+
 def cmd_status(args):
     status = request({"command": "status"}, args.socket)
     print(f"localpasskeyd {status['version']} is running.")
@@ -236,13 +355,31 @@ def main(argv=None):
     sub.add_argument("--user", help="act on another user's PIN (root only)")
     sub.set_defaults(func=cmd_pin)
 
+    sub = commands.add_parser("export", help="save passkeys to an encrypted backup file")
+    sub.add_argument("file", metavar="FILE", help="file to write, e.g. passkeys.lpkbackup")
+    sub.add_argument("ids", nargs="*", metavar="ID", help="passkey ID (or a unique prefix of it) from `list`")
+    sub.add_argument("--site", help="export every passkey for this site")
+    sub.add_argument("--all", action="store_true", help="export all of your passkeys (the default)")
+    sub.add_argument("--format", choices=("localpasskey", "cxf"), default="localpasskey",
+                     help="localpasskey: encrypted backup (default); cxf: FIDO Credential Exchange Format")
+    sub.add_argument("--unencrypted", action="store_true", help="required for --format cxf: write the keys in the clear")
+    sub.add_argument("--force", action="store_true", help="replace FILE if it exists")
+    sub.add_argument("--user", help="export another user's passkeys (root only)")
+    sub.set_defaults(func=cmd_export)
+
+    sub = commands.add_parser("import", help="add the passkeys from a backup, CXF or Bitwarden JSON file")
+    sub.add_argument("file", metavar="FILE", help="LocalPasskey backup, CXF file or unencrypted Bitwarden JSON export")
+    sub.add_argument("--user", help="import into another user's passkeys (root only)")
+    sub.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
+    sub.set_defaults(func=cmd_import)
+
     sub = commands.add_parser("status", help="check that the service is running")
     sub.set_defaults(func=cmd_status)
 
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (CliError, ServiceError) as e:
+    except (CliError, ServiceError, transfer.TransferError) as e:
         print(f"localpasskey: {e}", file=sys.stderr)
         return 1
     except (KeyboardInterrupt, EOFError):
