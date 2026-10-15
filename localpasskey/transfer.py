@@ -117,7 +117,7 @@ def _alg_of(key) -> int:
         return cose.ES256
     if isinstance(key, ed25519.Ed25519PrivateKey):
         return cose.EDDSA
-    if isinstance(key, rsa.RSAPrivateKey) and key.key_size >= 2048:
+    if isinstance(key, rsa.RSAPrivateKey) and 2048 <= key.key_size <= 4096:  # control.MAX_RSA_BITS
         return cose.RS256
     raise _Skip("unsupported key type")
 
@@ -222,8 +222,11 @@ def _check_header(doc: dict) -> dict:
     if not (_int(n, 2, MAX_SCRYPT_N) and n & (n - 1) == 0 and _int(r, 1, MAX_SCRYPT_R)
             and _int(p, 1, MAX_SCRYPT_P)):
         raise TransferError("This backup has unsafe key derivation parameters")
-    salt = kdf.get("salt")
-    if not isinstance(salt, str) or not _B64URL.fullmatch(salt) or len(b64decode(salt.rstrip("="))) < _SALT_SIZE:
+    try:
+        salt_ok = len(_binary(kdf.get("salt"), "salt")) >= _SALT_SIZE
+    except _Skip:
+        salt_ok = False
+    if not salt_ok:
         raise TransferError("This backup is damaged (bad salt)")
     return {key: doc[key] for key in ("format", "version", "kdf", "cipher")}
 
@@ -316,7 +319,10 @@ def _cxf_passkeys(doc: dict):
     version = doc.get("version")
     if not isinstance(version, dict) or version.get("major") != 1:
         raise TransferError("This CXF file has an unsupported version")
-    for account in doc.get("accounts") or []:
+    accounts = doc.get("accounts")
+    if not isinstance(accounts, list):
+        raise TransferError("This CXF file has no accounts")
+    for account in accounts:
         items = account.get("items") if isinstance(account, dict) else None
         for item in items if isinstance(items, list) else []:
             creds = item.get("credentials") if isinstance(item, dict) else None

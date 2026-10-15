@@ -91,7 +91,7 @@ class BackupTests(unittest.TestCase):
         hostile = [
             {"n": 2**21}, {"n": 2**20 + 1}, {"n": 3}, {"n": "1024"}, {"n": True},
             {"r": 9}, {"r": 0}, {"p": 5}, {"p": 0}, {"name": "pbkdf2"},
-            {"salt": b64encode(b"short")}, {"salt": "not base64!"},
+            {"salt": b64encode(b"short")}, {"salt": "not base64!"}, {"salt": "A" * 25}, {"salt": 5},
         ]
         for change in hostile:
             with self.subTest(change=change):
@@ -196,6 +196,13 @@ class CxfTests(unittest.TestCase):
         doc["version"]["major"] = 2
         with self.assertRaises(TransferError):
             transfer.load(json.dumps(doc).encode(), self.fail)
+
+    def test_accounts_must_be_a_list(self):
+        doc = json.loads(transfer.export_cxf([make_record()]))
+        for accounts in (5, True, {"a": 1}, None):
+            doc["accounts"] = accounts
+            with self.subTest(accounts=accounts), self.assertRaisesRegex(TransferError, "no accounts"):
+                transfer.load(json.dumps(doc).encode(), self.fail)
 
 
 def bitwarden_credential(record, **overrides):
