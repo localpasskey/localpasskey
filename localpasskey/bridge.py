@@ -24,16 +24,38 @@ import sys
 import threading
 from urllib.parse import urlsplit
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
+import fido2.features
+from fido2.client import ClientError, Fido2Client
+from fido2.ctap import CtapError
+from fido2.ctap2.extensions import CredPropsExtension, CredProtectExtension
 from fido2.hid import CtapHidDevice, list_descriptors, open_connection
+from fido2.rpid import verify_rp_id
+from fido2.utils import websafe_decode, websafe_encode
+from fido2.webauthn import PublicKeyCredentialCreationOptions, PublicKeyCredentialRequestOptions
 
+from . import cose
 from .config import load_config
 
 log = logging.getLogger(__name__)
 
 MAX_MESSAGE = 1024 * 1024
+# Chromium's JSON names; python-fido2 reads the same names for credProtect.
+CREATE_EXTENSIONS = ("credProps", "credentialProtectionPolicy", "enforceCredentialProtectionPolicy")
 LOCAL_ORIGINS = ("localhost", "127.0.0.1")  # http allowed for testing, like browsers do
 
 NOT_ALLOWED = ("NotAllowedError", "The operation either timed out or was not allowed.")
+ERRORS = {
+    CtapError.ERR.CREDENTIAL_EXCLUDED: (
+        "InvalidStateError",
+        "The authenticator already contains one of the credentials registered with this site.",
+    ),
+    CtapError.ERR.UNSUPPORTED_ALGORITHM: (
+        "NotSupportedError",
+        "None of the requested algorithms are supported.",
+    ),
+}
 
 
 class ProtocolError(ValueError):
@@ -109,13 +131,129 @@ def request_origin(details):
     return origin
 
 
+def _bytes(value):
+    if not isinstance(value, str):
+        raise ValueError("expected base64url")
+    return websafe_decode(value)
+
+
+def _descriptors(values):
+    # Transports are hints for the browser, not for the authenticator.
+    return [{"type": value["type"], "id": _bytes(value["id"])} for value in values or []]
+
+
+def creation_options(details):
+    selection = dict(details.get("authenticatorSelection") or {})
+    selection.pop("authenticatorAttachment", None)  # LocalPasskey is the platform authenticator here
+    extensions = details.get("extensions") or {}
+    return PublicKeyCredentialCreationOptions.from_dict({
+        "rp": details["rp"],
+        "user": {**details["user"], "id": _bytes(details["user"]["id"])},
+        "challenge": _bytes(details["challenge"]),
+        "pubKeyCredParams": details["pubKeyCredParams"],
+        "timeout": details.get("timeout"),
+        "excludeCredentials": _descriptors(details.get("excludeCredentials")),
+        "authenticatorSelection": selection,
+        "attestation": details.get("attestation"),
+        "extensions": {k: v for k, v in extensions.items() if k in CREATE_EXTENSIONS},
+    })
+
+
+def request_options(details):
+    # No getAssertion extensions are supported (appid, prf, largeBlob, ...).
+    return PublicKeyCredentialRequestOptions.from_dict({
+        "challenge": _bytes(details["challenge"]),
+        "timeout": details.get("timeout"),
+        "rpId": details.get("rpId"),
+        "allowCredentials": _descriptors(details.get("allowCredentials")),
+        "userVerification": details.get("userVerification"),
+    })
+
+
+def _spki(key):
+    alg = key[3]
+    if alg == cose.ES256:
+        public = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(key[-2], "big"), int.from_bytes(key[-3], "big"), ec.SECP256R1()
+        ).public_key()
+    elif alg == cose.EDDSA:
+        public = ed25519.Ed25519PublicKey.from_public_bytes(key[-2])
+    elif alg == cose.RS256:
+        public = rsa.RSAPublicNumbers(
+            int.from_bytes(key[-2], "big"), int.from_bytes(key[-1], "big")
+        ).public_key()
+    else:
+        raise ValueError(f"unsupported COSE algorithm {alg}")
+    return public.public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+
+def creation_response(result, details):
+    attestation = result.attestation_object
+    credential = attestation.auth_data.credential_data
+    credential_id = websafe_encode(credential.credential_id)
+    extensions = {}
+    if (details.get("extensions") or {}).get("credProps") is True:
+        extensions["credProps"] = (result.extension_results or {}).get("credProps", {})
+    return {
+        "id": credential_id,
+        "rawId": credential_id,
+        "type": "public-key",
+        "authenticatorAttachment": "platform",
+        "response": {
+            "clientDataJSON": websafe_encode(result.client_data),
+            "attestationObject": websafe_encode(attestation),
+            "authenticatorData": websafe_encode(attestation.auth_data),
+            "publicKey": websafe_encode(_spki(credential.public_key)),
+            "publicKeyAlgorithm": credential.public_key[3],
+            # usb: the passkey still works through the USB route without the extension.
+            "transports": ["internal", "usb"],
+        },
+        "clientExtensionResults": extensions,
+    }
+
+
+def assertion_response(selection):
+    # shortcut: with several discoverable passkeys for the site the newest is
+    # used (the confirmation dialog names none); add an account chooser if needed.
+    result = selection.get_response(0)
+    credential_id = websafe_encode(result.credential_id)
+    response = {
+        "clientDataJSON": websafe_encode(result.client_data),
+        "authenticatorData": websafe_encode(result.authenticator_data),
+        "signature": websafe_encode(result.signature),
+    }
+    if result.user_handle:
+        response["userHandle"] = websafe_encode(result.user_handle)
+    return {
+        "id": credential_id,
+        "rawId": credential_id,
+        "type": "public-key",
+        "authenticatorAttachment": "platform",
+        "response": response,
+        "clientExtensionResults": {},
+    }
+
+
+def _error(exc):
+    cause = exc.cause if isinstance(exc, ClientError) else exc
+    name, message = ERRORS.get(cause.code, NOT_ALLOWED) if isinstance(cause, CtapError) else NOT_ALLOWED
+    return {"error": {"name": name, "message": message}}
+
+
 def ceremony(kind, details_json, cancel, open_device=open_device):
     details = json.loads(details_json)
     if not isinstance(details, dict):
         raise Refused("request is not an object")
-    request_origin(details)
-    open_device()
-    raise Refused("not implemented yet")
+    origin = request_origin(details)
+    options = creation_options(details) if kind == "create" else request_options(details)
+    client = Fido2Client(
+        open_device(), origin, verify=verify_rp_id, extension_types=[CredPropsExtension, CredProtectExtension]
+    )
+    if kind == "create":
+        return creation_response(client.make_credential(options, event=cancel), details)
+    return assertion_response(client.get_assertion(options, event=cancel))
 
 
 def handle(message, cancel, open_device=open_device, find_device=find_device):
@@ -132,7 +270,7 @@ def handle(message, cancel, open_device=open_device, find_device=find_device):
         log.debug("request failed: %s", type(e).__name__)  # no request data in logs
         if kind == "status":
             return {"available": False}
-        return {"error": {"name": NOT_ALLOWED[0], "message": NOT_ALLOWED[1]}}
+        return _error(e)
 
 
 def _cancel_at_eof(stream, cancel):
@@ -161,6 +299,7 @@ def serve(stdin, stdout, open_device=open_device, find_device=find_device):
 
 def main():
     logging.basicConfig(format="localpasskey-bridge: %(message)s", level=logging.WARNING)
+    fido2.features.webauthn_json_mapping.enabled = False  # bytes are passed as bytes
     if os.environ.get("LOCALPASSKEY_BRIDGE_DEBUG"):
         log.setLevel(logging.DEBUG)
     # Browser arguments (caller origin, --parent-window) are not needed.

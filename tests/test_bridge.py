@@ -1,14 +1,31 @@
 import io
 import json
+import os
 import struct
 import threading
 import unittest
 from unittest.mock import patch
 
-from fido2.utils import websafe_encode
+from cryptography.hazmat.primitives import serialization
+from fido2.server import Fido2Server
+from fido2.utils import websafe_decode, websafe_encode
+from fido2.webauthn import (
+    AttestationObject,
+    AuthenticatorData,
+    CollectedClientData,
+    PublicKeyCredentialParameters,
+    PublicKeyCredentialRpEntity,
+    PublicKeyCredentialType,
+    PublicKeyCredentialUserEntity,
+    ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
 
-from localpasskey import bridge
+from localpasskey import bridge, cose
 from localpasskey.config import Config
+from localpasskey.ctap2 import Verdict
+
+from .helpers import Harness
 
 ORIGIN = "https://example.com"
 NOT_ALLOWED = "NotAllowedError"
@@ -23,7 +40,7 @@ def override(origin=ORIGIN, same=True):
     return {"remoteDesktopClientOverride": {"origin": origin, "sameOriginWithAncestors": same}}
 
 
-def create_details(challenge, user_id=b"alice-id", algs=(-7,), exclude=(), extensions=None, **selection):
+def create_details(challenge, user_id=b"alice-id", algs=(cose.ES256,), exclude=(), extensions=None, **selection):
     """A request shaped like Chromium's requestDetailsJson for create()."""
     return {
         "rp": {"id": "example.com", "name": "Example"},
@@ -132,6 +149,175 @@ class OriginTests(unittest.TestCase):
         reply = bridge.handle({"type": "create", "requestDetailsJson": json.dumps(details)}, threading.Event(),
                               open_device=self.fail)
         self.assertEqual(reply["error"]["name"], NOT_ALLOWED)
+
+
+class ConversionTests(unittest.TestCase):
+    def test_creation_options(self):
+        details = create_details(
+            b"c" * 32, exclude=[b"old"],
+            extensions={"credProps": True, "appIdExclude": "https://x", "prf": {}, "credentialProtectionPolicy": "userVerificationRequired"},
+        )
+        bridge.request_origin(details)
+        options = bridge.creation_options(details)
+        self.assertEqual(options.challenge, b"c" * 32)
+        self.assertEqual(options.user.id, b"alice-id")
+        self.assertEqual(options.user.display_name, "Alice")
+        self.assertIsNone(options.authenticator_selection.authenticator_attachment)
+        self.assertEqual(options.authenticator_selection.resident_key, ResidentKeyRequirement.REQUIRED)
+        self.assertEqual(options.authenticator_selection.user_verification, UserVerificationRequirement.PREFERRED)
+        self.assertEqual(options.exclude_credentials[0].id, b"old")
+        self.assertIsNone(options.exclude_credentials[0].transports)
+        self.assertEqual(dict(options.extensions), {"credProps": True, "credentialProtectionPolicy": "userVerificationRequired"})
+        self.assertEqual(options.timeout, 60000)
+
+    def test_request_options(self):
+        details = get_details(b"c" * 32, allow=[b"one"], extensions={"appid": "https://x", "prf": {}})
+        bridge.request_origin(details)
+        options = bridge.request_options(details)
+        self.assertEqual((options.rp_id, options.challenge), ("example.com", b"c" * 32))
+        self.assertEqual(options.allow_credentials[0].id, b"one")
+        self.assertIsNone(options.extensions)
+
+    def test_malformed_requests_are_not_allowed(self):
+        for details in ("[]", "{", json.dumps({"extensions": override()}),
+                        json.dumps({**get_details(b"c"), "challenge": 5})):
+            reply = bridge.handle({"type": "get", "requestDetailsJson": details}, threading.Event(), open_device=self.fail)
+            self.assertEqual(reply["error"]["name"], NOT_ALLOWED)
+        for message in ({"type": "sign"}, {}, {"type": "create"}):
+            self.assertEqual(bridge.handle(message, threading.Event(), open_device=self.fail)["error"]["name"], NOT_ALLOWED)
+
+
+class BridgeFlowTests(unittest.TestCase):
+    """The bridge in front of the in-process authenticator; Fido2Server plays the site."""
+
+    def setUp(self):
+        self.h = Harness()
+        self.server = Fido2Server(PublicKeyCredentialRpEntity(id="example.com", name="Example"))
+        self.server.allowed_algorithms = [
+            PublicKeyCredentialParameters(PublicKeyCredentialType.PUBLIC_KEY, alg) for alg in cose.SUPPORTED_ALGORITHMS
+        ]
+
+    def tearDown(self):
+        self.h.close()
+
+    def run_bridge(self, kind, details, cancel=None):
+        reply = bridge.handle(
+            {"type": kind, "requestDetailsJson": json.dumps(details)},
+            cancel or threading.Event(),
+            open_device=lambda: self.h.device,
+        )
+        return json.loads(reply["responseJson"]) if "responseJson" in reply else reply
+
+    def register(self, alg=cose.ES256, **kwargs):
+        options, state = self.server.register_begin(
+            PublicKeyCredentialUserEntity(id=b"alice-id", name="alice"),
+            user_verification=UserVerificationRequirement.PREFERRED,
+        )
+        response = self.run_bridge("create", create_details(options["publicKey"]["challenge"], algs=(alg,), **kwargs))
+        return state, response
+
+    def test_create_and_get_for_every_algorithm(self):
+        for alg in cose.SUPPORTED_ALGORITHMS:
+            with self.subTest(alg=alg):
+                state, created = self.register(alg, extensions={"credProps": True})
+                self.assertEqual(created["type"], "public-key")
+                self.assertEqual(created["authenticatorAttachment"], "platform")
+                self.assertEqual(created["id"], created["rawId"])
+                response = created["response"]
+                self.assertEqual(response["transports"], ["internal", "usb"])
+                self.assertEqual(response["publicKeyAlgorithm"], alg)
+                self.assertEqual(created["clientExtensionResults"], {"credProps": {"rk": True}})
+                client_data = CollectedClientData(websafe_decode(response["clientDataJSON"]))
+                self.assertEqual((client_data.origin, client_data.cross_origin), (ORIGIN, False))
+                attestation = AttestationObject(websafe_decode(response["attestationObject"]))
+                self.assertEqual(websafe_decode(response["authenticatorData"]), bytes(attestation.auth_data))
+                auth = self.server.register_complete(state, client_data, attestation)
+                self.assertTrue(auth.is_user_present() and auth.is_user_verified())
+                credential = auth.credential_data
+                self.assertEqual(websafe_decode(created["rawId"]), credential.credential_id)
+                spki = serialization.load_der_public_key(websafe_decode(response["publicKey"]))
+                self.assertEqual(type(credential.public_key).from_cryptography_key(spki), credential.public_key)
+
+                for allow in ([credential.credential_id], []):
+                    options, state = self.server.authenticate_begin([credential])
+                    got = self.run_bridge("get", get_details(options["publicKey"]["challenge"], allow=allow))
+                    self.assertEqual(got["authenticatorAttachment"], "platform")
+                    self.assertEqual(got["clientExtensionResults"], {})
+                    response = got["response"]
+                    self.assertEqual(websafe_decode(response["userHandle"]), b"alice-id")
+                    self.server.authenticate_complete(
+                        state, [credential], websafe_decode(got["rawId"]),
+                        CollectedClientData(websafe_decode(response["clientDataJSON"])),
+                        AuthenticatorData(websafe_decode(response["authenticatorData"])),
+                        websafe_decode(response["signature"]),
+                    )
+
+    def test_no_cred_props_unless_asked_and_no_user_handle_for_non_discoverable(self):
+        state, created = self.register(residentKey="discouraged")
+        self.assertEqual(created["clientExtensionResults"], {})
+        credential = self.server.register_complete(
+            state,
+            CollectedClientData(websafe_decode(created["response"]["clientDataJSON"])),
+            AttestationObject(websafe_decode(created["response"]["attestationObject"])),
+        ).credential_data
+        options, _ = self.server.authenticate_begin([credential])
+        got = self.run_bridge("get", get_details(options["publicKey"]["challenge"], allow=[credential.credential_id]))
+        self.assertNotIn("userHandle", got["response"])
+
+    def test_excluded_credential_is_invalid_state(self):
+        _, created = self.register()
+        reply = self.run_bridge("create", create_details(b"c" * 32, exclude=[websafe_decode(created["rawId"])]))
+        self.assertEqual(reply["error"]["name"], "InvalidStateError")
+
+    def test_unsupported_algorithm_is_not_supported(self):
+        reply = self.run_bridge("create", create_details(b"c" * 32, algs=(-35,)))
+        self.assertEqual(reply["error"]["name"], "NotSupportedError")
+
+    def test_failures_are_not_allowed_without_request_data(self):
+        details = get_details(b"secret-challenge-bytes", allow=[b"nope"])
+        reply = self.run_bridge("get", details)
+        self.assertEqual(reply, {"error": {"name": NOT_ALLOWED, "message": bridge.NOT_ALLOWED[1]}})
+        self.assertNotIn(details["challenge"], json.dumps(reply))
+
+        wrong_rp = get_details(b"c" * 32, rp_id="other.com")
+        self.assertEqual(self.run_bridge("get", wrong_rp)["error"]["name"], NOT_ALLOWED)
+
+        self.h.verifier.verdict = Verdict.DENIED
+        self.assertEqual(self.run_bridge("create", create_details(b"c" * 32))["error"]["name"], NOT_ALLOWED)
+
+        def missing():
+            raise bridge.Refused("LocalPasskey device not found")
+
+        reply = bridge.handle({"type": "get", "requestDetailsJson": json.dumps(get_details(b"c"))},
+                              threading.Event(), open_device=missing)
+        self.assertEqual(reply["error"]["name"], NOT_ALLOWED)
+
+    def test_closing_stdin_cancels_the_ceremony(self):
+        self.h.verifier.delay = 30
+        read_fd, write_fd = os.pipe()
+        stdin, out = os.fdopen(read_fd, "rb"), io.BytesIO()
+        os.write(write_fd, frame({"type": "create", "requestDetailsJson": json.dumps(create_details(b"c" * 32))}))
+        done = threading.Thread(target=bridge.serve, args=(stdin, out),
+                                kwargs={"open_device": lambda: self.h.device})
+        done.start()
+        self.assertTrue(self.h.verifier.messages or self._wait(lambda: self.h.verifier.messages))
+        os.close(write_fd)
+        done.join(10)
+        stdin.close()
+        self.assertFalse(done.is_alive())
+        self.assertTrue(self.h.verifier.saw_cancel.is_set())
+        reply = bridge.read_message(io.BytesIO(out.getvalue()))
+        self.assertEqual(reply["error"]["name"], NOT_ALLOWED)
+        self.assertEqual(self.h.credentials(), [])
+
+    @staticmethod
+    def _wait(condition, timeout=5.0):
+        event = threading.Event()
+        for _ in range(int(timeout / 0.02)):
+            if condition():
+                return True
+            event.wait(0.02)
+        return False
 
 
 @patch.object(bridge, "load_config", Config)
