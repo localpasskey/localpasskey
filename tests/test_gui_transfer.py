@@ -151,6 +151,19 @@ class WindowTransferTests(unittest.TestCase):
     def live(self):
         return self.window._creds
 
+    def test_a_transfer_in_progress_disables_the_other_actions(self):
+        self.window._show(self.live()[0])
+        self.assertTrue(self.window._start("Waiting…"))
+        for act in (self.window.import_action, self.window.export_action):
+            self.assertFalse(act.isEnabled())
+        self.assertFalse(self.window.details.delete_button.isEnabled())
+        self.assertEqual(self.window.details.delete_button.text(), "Move to Trash…")
+        self.window._finish()
+        self.wait_for(lambda: not self.window._refreshing)
+        for act in (self.window.import_action, self.window.export_action):
+            self.assertTrue(act.isEnabled())
+        self.assertTrue(self.window.details.delete_button.isEnabled())
+
     def test_export_writes_an_encrypted_owner_only_backup(self):
         self.export()
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)

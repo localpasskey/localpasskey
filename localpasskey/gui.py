@@ -297,9 +297,9 @@ class Details(QFrame):
         self.purge_button.setVisible(trashed)
         self.set_busy(False)
 
-    def set_busy(self, busy):
+    def set_busy(self, busy, moving=True):
         self.delete_button.setEnabled(not busy)
-        self.delete_button.setText("Moving…" if busy else "Move to Trash…")
+        self.delete_button.setText("Moving…" if busy and moving else "Move to Trash…")
         self.restore_button.setEnabled(not busy)
         self.purge_button.setEnabled(not busy)
 
@@ -625,7 +625,7 @@ class Window(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         action(file_menu, "&Refresh", self.refresh, QKeySequence.StandardKey.Refresh)
         file_menu.addSeparator()
-        action(file_menu, "&Import Passkeys…", self.import_passkeys)
+        self.import_action = action(file_menu, "&Import Passkeys…", self.import_passkeys)
         self.export_action = action(file_menu, "&Export Passkeys…", self.export_passkeys)
         file_menu.addSeparator()
         action(file_menu, "Security Key &PIN…", self.show_pin_dialog)
@@ -764,6 +764,8 @@ class Window(QMainWindow):
             act.setVisible(not self._trash)
         self.all_delete_action.setEnabled(not self._trash and not self._busy)
         self.all_restore_action.setEnabled(self._trash and not self._busy)
+        self.import_action.setEnabled(not self._busy)
+        self.export_action.setEnabled(not self._busy)
         chosen = cred is not None
         for act in (self.copy_action, self.open_action, self.delete_action, self.site_delete_action,
                     self.restore_action, self.site_restore_action, self.purge_action):
@@ -947,10 +949,13 @@ class Window(QMainWindow):
         self._busy = True
         self.statusBar().showMessage(note)
         self._resync()
+        if self.side.currentWidget() is self.details:
+            self.details.set_busy(True, moving=False)
         return True
 
     def _finish(self, error=None, done=None):
         self._busy = False
+        self.details.set_busy(False)
         self._resync()
         if error is not None:
             self._error(error)
