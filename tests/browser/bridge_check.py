@@ -8,7 +8,7 @@ from tests/helpers.py (approving every prompt) instead of /dev/hidraw*. The
 page on http://localhost creates and uses passkeys with "platform" attachment
 and every result is verified with python-fido2's Fido2Server.
 
-    python3 -m tests.browser.bridge_check [--chrome PATH]
+    python3 -m tests.browser.bridge_check [--chrome PATH]   # or set $CHROME
 
 Requires websocket-client and python-fido2. Not part of make check.
 """
