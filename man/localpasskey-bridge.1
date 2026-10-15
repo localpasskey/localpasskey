@@ -1,0 +1,59 @@
+.TH LOCALPASSKEY-BRIDGE 1 "October 2026" "localpasskey 0.2.0" "User Commands"
+.SH NAME
+localpasskey-bridge \- native messaging host that lets Chrome and Chromium use LocalPasskey as this device's passkey authenticator
+.SH SYNOPSIS
+.B /usr/lib/localpasskey/localpasskey-bridge
+.SH DESCRIPTION
+.B localpasskey-bridge
+is not run by hand. The LocalPasskey browser extension for Google Chrome and
+Chromium takes over WebAuthn with the
+.B chrome.webAuthenticationProxy
+API, and the browser starts the bridge, as you, once for every passkey
+request. It reads one native message from standard input (a 4-byte length
+followed by JSON), answers on standard output and exits. Closing standard
+input cancels a request in progress.
+.PP
+A create or sign-in request runs on the LocalPasskey virtual security key of
+.BR localpasskeyd (8),
+found by the USB IDs and product name in
+.IR /etc/localpasskey/localpasskeyd.conf .
+Other security keys are never used. The usual confirmation dialog appears,
+naming the browser that started the bridge. Requests that ask for a passkey
+on this device (\fBauthenticatorAttachment: "platform"\fR) are answered too,
+which is the reason for the bridge: without it Chrome refuses them on Linux.
+.PP
+The website's origin is taken from the browser, which checked it against the
+site's rp ID. The bridge checks the rp ID again and refuses origins that are
+not https (other than http://localhost) and requests from cross-origin
+iframes. Errors reach the page as a generic
+.BR NotAllowedError ,
+.B InvalidStateError
+(this computer already has one of the passkeys the site listed) or
+.B NotSupportedError
+(no supported algorithm); they never carry request data.
+.SH SETUP
+Open
+.BR chrome://extensions ,
+switch on Developer mode, click Load unpacked and choose
+.IR /usr/share/localpasskey/chromium-extension .
+Passkey autofill, other security keys, phones and passkeys saved in the
+browser are not offered while the extension is on; see the README for all
+limitations.
+.SH ENVIRONMENT
+.TP
+.B LOCALPASSKEY_BRIDGE_DEBUG
+If set, log why a request failed (the exception type only) to standard error,
+which the browser writes to its own log.
+.SH FILES
+.TP
+.I /etc/opt/chrome/native-messaging-hosts/org.localpasskey.bridge.json
+.TQ
+.I /etc/chromium/native-messaging-hosts/org.localpasskey.bridge.json
+Register the bridge with Google Chrome and Chromium, for the LocalPasskey
+extension's ID only.
+.TP
+.I /usr/share/localpasskey/chromium-extension/
+The extension.
+.SH SEE ALSO
+.BR localpasskey (1),
+.BR localpasskeyd (8)

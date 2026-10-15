@@ -42,6 +42,7 @@ install-service:
 	install -D -m 0644 data/localpasskeyd.conf $(DESTDIR)$(SYSCONFDIR)/localpasskey/localpasskeyd.conf
 	install -D -m 0644 man/localpasskeyd.8 $(DESTDIR)$(MANDIR)/man8/localpasskeyd.8
 	install -D -m 0644 man/localpasskey.1 $(DESTDIR)$(MANDIR)/man1/localpasskey.1
+	install -D -m 0644 man/localpasskey-bridge.1 $(DESTDIR)$(MANDIR)/man1/localpasskey-bridge.1
 
 install-gui:
 	install -D -m 0644 localpasskey/gui.py $(DESTDIR)$(PKGDATADIR)/localpasskey/gui.py

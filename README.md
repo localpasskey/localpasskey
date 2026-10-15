@@ -24,6 +24,8 @@ is needed.
   platform-authenticator API, but all of them support USB security keys, so
   this works with Firefox, Chromium/Chrome/Brave/Edge, and libfido2 tools
   (`fido2-token`, `ssh-keygen -t ed25519-sk`) without any browser extension.
+  An optional extension for Chrome and Chromium also makes LocalPasskey the
+  browser's passkey authenticator "on this device" (see below).
 * systemd's `fido_id` udev rules recognise the device as a FIDO token and give
   the user at the active desktop session access to it, as with real keys.
 * The authenticator speaks CTAP 2.0 and advertises **built-in user
@@ -76,6 +78,7 @@ localpasskey/
 ├── uhid.py       # creates the virtual USB device via /dev/uhid
 ├── daemon.py     # the root service: owns the device, routes requests
 ├── session.py    # maps a request to the Linux user who sent it
+├── bridge.py     # native messaging host for the Chrome/Chromium extension
 ├── polkit.py     # asks for confirmation; the trust boundary
 ├── store.py      # per-user passkeys on disk, sealed with AES-256-GCM
 ├── clientpin.py  # the CTAP2 PIN/UV protocols and the PIN browsers set
@@ -107,6 +110,60 @@ fido2-token -L                # from fido2-tools; shows the virtual key
 Then register a passkey on any site that supports them (for example
 <https://webauthn.io>). In the browser's dialog, pick the USB security key
 option if it asks.
+
+## Passkeys on this device in Chrome and Chromium (optional)
+
+On Linux, Chrome and Chromium have no built-in passkey authenticator: they
+answer "no" when a site asks whether this device can hold a passkey, and
+refuse requests for one (`authenticatorAttachment: "platform"`), so a site's
+*Create a passkey* button fails while *Use a security key* works. The
+LocalPasskey extension fixes that. It uses Chrome's
+`chrome.webAuthenticationProxy` API to take over WebAuthn in the browser and
+passes every create and sign-in request to `localpasskey-bridge`, a small
+native messaging host the package installs. The bridge runs the request on
+the LocalPasskey key, so the usual dialog still asks you to confirm. The
+passkey is created as one that belongs to this device, and its transports also
+list USB, so it keeps working through the security-key route when the extension
+is off.
+
+To turn it on, open `chrome://extensions`, switch on *Developer mode*, click
+*Load unpacked* and choose `/usr/share/localpasskey/chromium-extension`. The
+extension then shows up with the ID `pocajecgdempcabeopbbdhebigifnkbf`. The
+bridge is registered for the deb packages of Google Chrome
+(`/etc/opt/chrome/native-messaging-hosts/`) and Chromium
+(`/etc/chromium/native-messaging-hosts/`). It needs `python3-fido2`, which the
+package recommends. To turn it off, disable or remove the extension.
+
+While the extension is on:
+
+* Passkey autofill (the account list in a username field, "conditional
+  mediation") is off: Chrome refuses such requests while an extension handles
+  WebAuthn. Sites fall back to their sign-in button.
+* Every request goes to LocalPasskey. Chrome no longer offers other security
+  keys, a phone (hybrid), or passkeys saved in Google Password Manager. If the
+  LocalPasskey service is not running, requests fail instead of falling back,
+  so turn the extension off first.
+* Only one extension can handle WebAuthn at a time. If another one already
+  does, LocalPasskey stays idle.
+* Requests from a page framed by another site (cross-origin iframes) are
+  refused.
+* For a sign-in without a username, where you have several passkeys for the
+  site, the newest one is used; there is no account chooser.
+* Brave, Edge and other Chromium-based browsers read their own
+  native-messaging directories, and snap or Flatpak browsers can't start the
+  bridge. Firefox has no such API and keeps using the security-key route.
+* Installing it by policy (`ExtensionInstallForcelist`) is not supported
+  out of the box: policy needs a packed `.crx` and an update manifest, and
+  packing it with another key changes the ID the bridge allows.
+
+Security notes: the website's origin comes from Chrome, which checked it
+against the site's rp ID; the bridge checks it again, and builds the signed
+client data itself. Chrome starts the bridge only for the extension ID above.
+The bridge talks to the LocalPasskey key and to no other security key. The
+confirmation dialog names the browser that started the bridge, for example
+*"Chromium wants to sign in to ..."*. Any extension with the
+`webAuthenticationProxy` permission sees all of the browser's passkey requests,
+so install only extensions you trust with that. See `localpasskey-bridge(1)`.
 
 ## Managing passkeys
 
@@ -239,8 +296,10 @@ service after changes. Logs: `journalctl -u localpasskey`.
 * **Google says a passkey "can't be created on this device" (or "is not
   supported for this device"):** on myaccount.google.com → *Passkeys*, the
   main *Create a passkey* button asks the browser for a *platform*
-  authenticator (`authenticatorAttachment: "platform"`). Chromium never sends
-  such a request to a USB key, so LocalPasskey never sees it. Choose *Use
+  authenticator (`authenticatorAttachment: "platform"`). Without the
+  extension, Chromium never sends such a request to a USB key, so LocalPasskey
+  never sees it. In Chrome or Chromium, turn on the extension (see *Passkeys on
+  this device in Chrome and Chromium*). Otherwise choose *Use
   another device* (also shown as *Use a different device*) instead: that
   request allows security keys, and LocalPasskey answers it. Browsers that
   report Windows or macOS, or claim a built-in authenticator, make *Create a
@@ -268,7 +327,9 @@ service after changes. Logs: `journalctl -u localpasskey`.
 
 * Sites that only offer passkeys when the browser reports a *platform*
   authenticator (`authenticatorAttachment: "platform"`) won't route requests
-  here. Linux browsers don't have a platform authenticator API to plug into.
+  here, except in Chrome and Chromium with the optional extension (which has
+  limitations of its own, listed in its section). Firefox has no platform
+  authenticator API to plug into.
 * The `prf`/`hmac-secret`, `largeBlob` and `credBlob` extensions are not
   implemented. For mainstream sites this goes unnoticed: CTAP2 says an
   authenticator must ignore an extension it doesn't know, so registering and
@@ -320,6 +381,13 @@ Chromium profile with remote debugging enabled. With that browser focused:
 python3 -m tests.browser.check firefox --port 9233
 python3 -m tests.browser.check chromium --port 9234
 ```
+
+`python3 -m tests.browser.bridge_check` checks the Chrome/Chromium extension
+and bridge offline: it starts a headless Chromium with a fresh profile, the
+real extension and a bridge running on an in-process test authenticator (no
+`/dev/hidraw*`), creates and uses "platform" passkeys for all three
+algorithms, and verifies them with `Fido2Server`. Pass `--chrome PATH` for the
+browser binary.
 
 The checker uses `websocket-client` (`python3-websocket` on Debian) and verifies
 registration and assertion signatures for ES256, Ed25519 and RS256. It uses
