@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import pwd
+import re
 from typing import Callable, List, Optional
 
 from gi.repository import Gio, GLib
@@ -40,6 +41,13 @@ _APP_NAMES = {
     "ssh-keygen": "ssh-keygen",
     "ssh-sk-helper": "SSH",
 }
+
+# The native messaging host opens the device on the browser's behalf.
+_BRIDGE_PATHS = {
+    "/usr/lib/localpasskey/localpasskey-bridge",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "localpasskey-bridge"),
+}
+_PYTHON = re.compile(r"python3(\.\d+)?")
 
 
 def processes_with_open(path: str) -> List[int]:
@@ -75,7 +83,38 @@ def process_uid(pid: int) -> Optional[int]:
     return None
 
 
+def parent_pid(pid: int) -> Optional[int]:
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("PPid:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _runs_bridge(pid: int) -> bool:
+    try:
+        exe = os.path.basename(os.readlink(f"/proc/{pid}/exe")).removesuffix(" (deleted)")
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            argv = f.read().split(b"\0")
+    except OSError:
+        return False
+    return bool(_PYTHON.fullmatch(exe)) and len(argv) > 1 and os.fsdecode(argv[1]) in _BRIDGE_PATHS
+
+
 def application_name(pid: int) -> Optional[str]:
+    """Name of the application behind ``pid``; the bridge is named after the
+    browser that started it. Only the real parent counts, so a process posing
+    as the bridge can only take its own parent's name."""
+    if _runs_bridge(pid):
+        ppid = parent_pid(pid)
+        return _executable_name(ppid) if ppid else None
+    return _executable_name(pid)
+
+
+def _executable_name(pid: int) -> Optional[str]:
     try:
         name = os.path.basename(os.readlink(f"/proc/{pid}/exe")).removesuffix(" (deleted)")
     except OSError:

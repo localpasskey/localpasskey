@@ -93,6 +93,60 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(processes_with_open("/dev/hidraw42"), [12])
         self.assertEqual(closed, ["/proc/12/fd", "/proc/13/fd", "/proc"])
 
+    def fake_proc(self, procs):
+        """Patch /proc reads with {pid: (exe, argv, ppid)}."""
+        def readlink(path):
+            _, _, pid, _ = path.split("/")
+            if int(pid) not in procs:
+                raise FileNotFoundError(path)
+            return procs[int(pid)][0]
+
+        def fake_open(path, mode="r"):
+            from io import BytesIO, StringIO
+            _, _, pid, name = path.split("/")
+            if int(pid) not in procs:
+                raise FileNotFoundError(path)
+            exe, argv, ppid = procs[int(pid)]
+            if name == "cmdline":
+                return BytesIO(b"\0".join(a.encode() for a in argv) + b"\0")
+            if name == "status":
+                return StringIO(f"Name:\tx\nPPid:\t{ppid}\n")
+            raise FileNotFoundError(path)
+
+        return patch("localpasskey.session.os.readlink", side_effect=readlink), patch("builtins.open", side_effect=fake_open)
+
+    def test_bridge_is_named_after_its_parent_browser(self):
+        bridge = "/usr/lib/localpasskey/localpasskey-bridge"
+        procs = {
+            10: ("/usr/lib/chromium/chromium", ["/usr/lib/chromium/chromium"], 1),
+            20: ("/usr/bin/python3.13", ["/usr/bin/python3", bridge, "chrome-extension://x/"], 10),
+            21: ("/usr/bin/python3.13", ["/usr/bin/python3", bridge + "-evil"], 10),
+            22: ("/usr/bin/python3", ["/usr/bin/python3", "-c", bridge], 10),
+            23: ("/tmp/python3x", ["/tmp/python3x", bridge], 10),
+            24: ("/usr/bin/python3", ["/usr/bin/python3", bridge], 99),
+            25: ("/usr/bin/python3", ["/usr/bin/python3"], 10),
+        }
+        expected = {10: "Chromium", 20: "Chromium", 21: "python3.13", 22: "python3", 23: "python3x", 24: None, 25: "python3"}
+        readlink, opener = self.fake_proc(procs)
+        with readlink, opener:
+            for pid, name in expected.items():
+                with self.subTest(pid=pid):
+                    self.assertEqual(application_name(pid), name)
+
+    def test_real_bridge_process_takes_parents_name(self):
+        with tempfile.NamedTemporaryFile("w", suffix="-bridge") as script:
+            script.write("import os, sys; print(os.getpid(), flush=True); sys.stdin.read(1)\n")
+            script.flush()
+            # The shell stays alive as the bridge's parent, standing in for the browser.
+            shell = subprocess.Popen(["/bin/sh", "-c", f'"{sys.executable}" "{script.name}"; :'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            try:
+                bridge = int(shell.stdout.readline())
+                own_name = application_name(bridge)
+                with patch("localpasskey.session._BRIDGE_PATHS", {script.name}):
+                    self.assertEqual(application_name(bridge), application_name(shell.pid))
+                self.assertNotEqual(own_name, application_name(shell.pid))
+            finally:
+                shell.communicate("x", timeout=5)
 
 if __name__ == "__main__":
     unittest.main()
