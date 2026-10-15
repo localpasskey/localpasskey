@@ -18,8 +18,9 @@ A create or sign-in request runs on the LocalPasskey virtual security key of
 found by the USB IDs and product name in
 .IR /etc/localpasskey/localpasskeyd.conf .
 Other security keys are never used. The usual confirmation dialog appears,
-naming the browser that started the bridge. Requests that ask for a passkey
-on this device (\fBauthenticatorAttachment: "platform"\fR) are answered too,
+naming the browser that started the bridge (a hint only: any program
+running as you can make the dialog show another name). Requests that ask for
+a passkey on this device (\fBauthenticatorAttachment: "platform"\fR) are answered too,
 which is the reason for the bridge: without it Chrome refuses them on Linux.
 .PP
 The website's origin is taken from the browser, which checked it against the

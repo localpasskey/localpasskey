@@ -106,8 +106,8 @@ def _runs_bridge(pid: int) -> bool:
 
 def application_name(pid: int) -> Optional[str]:
     """Name of the application behind ``pid``; the bridge is named after the
-    browser that started it. Only the real parent counts, so a process posing
-    as the bridge can only take its own parent's name."""
+    browser that started it. This is a hint for the dialog, not a check: a
+    process running as the user can still pick any name it likes."""
     if _runs_bridge(pid):
         ppid = parent_pid(pid)
         return _executable_name(ppid) if ppid else None

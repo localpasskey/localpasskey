@@ -162,7 +162,9 @@ origins that are not https and builds the signed client data itself. Chrome
 starts the bridge only for the extension ID above. The bridge talks to the
 LocalPasskey key and to no other security key. The confirmation dialog names
 the browser that started the bridge, for example *"Chromium wants to sign in
-to ..."*. Any extension with the
+to ..."*. That name is a hint, not proof: as with any app, a program running
+as you can make the dialog show another name, so check the site and only
+confirm requests you just started. Any extension with the
 `webAuthenticationProxy` permission sees all of the browser's passkey requests,
 so install only extensions you trust with that. See `localpasskey-bridge(1)`.
 
