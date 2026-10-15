@@ -274,6 +274,9 @@ def handle(message, cancel, open_device=open_device, find_device=find_device):
 
 
 def _cancel_at_eof(stream, cancel):
+    # Read below the buffer: a thread blocked holding the buffer's lock makes
+    # interpreter shutdown abort ("could not acquire lock ... <stdin>").
+    stream = getattr(stream, "raw", stream)
     while stream.read(4096):
         pass  # one request per process: anything after it is ignored
     cancel.set()

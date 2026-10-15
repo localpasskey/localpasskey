@@ -2,6 +2,8 @@ import io
 import json
 import os
 import struct
+import subprocess
+import sys
 import threading
 import unittest
 from unittest.mock import patch
@@ -105,6 +107,20 @@ class FramingTests(unittest.TestCase):
         status = bridge.serve(io.BytesIO(frame({"type": "status"})), out, find_device=lambda: object())
         self.assertEqual(status, 0)
         self.assertEqual(bridge.read_message(io.BytesIO(out.getvalue())), {"available": True})
+
+    def test_process_exits_cleanly_while_the_browser_keeps_stdin_open(self):
+        # A reader blocked in the buffered stdin used to abort interpreter shutdown.
+        script = "import sys; from localpasskey import bridge; sys.exit(bridge.serve(sys.stdin.buffer, sys.stdout.buffer))"
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, frame({"type": "unknown"}))
+        try:
+            result = subprocess.run([sys.executable, "-c", script], stdin=read_fd, capture_output=True, timeout=30,
+                                    cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        self.assertEqual((result.returncode, result.stderr), (0, b""))
+        self.assertEqual(bridge.read_message(io.BytesIO(result.stdout))["error"]["name"], NOT_ALLOWED)
 
     def test_serve_without_input_or_with_garbage_writes_nothing(self):
         for data, code in ((b"", 0), (struct.pack("=I", 1 << 30), 1)):
