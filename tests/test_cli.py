@@ -86,7 +86,7 @@ class CliTests(unittest.TestCase):
             "list": {"credentials": [credential]},
             "pin": {"set": False, "retries": 8},
         }
-        for command, extra in (("delete", ["--all"]), ("list", []), ("pin", ["status"])):
+        for command, extra in (("delete", ["--all", "--yes"]), ("list", []), ("pin", ["status"])):
             with (
                 self.subTest(command=command),
                 patch("localpasskey.cli.request", return_value=replies[command]) as request,
