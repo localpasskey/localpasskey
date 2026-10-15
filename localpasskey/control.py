@@ -3,34 +3,46 @@
 Each connection carries one JSON request and one JSON reply, one line each.
 The kernel tells us the caller's uid (SO_PEERCRED), so users can only see and
 manage their own passkeys; root may pass ``"user"`` to manage anyone's.
-Deleting moves passkeys to the trash; restoring, purging and the PIN ask the
-caller to authenticate through polkit first.
+Deleting moves passkeys to the trash; restoring, purging, the PIN, export and
+import ask the caller to authenticate through polkit first.
+
+Export and import exchange "normalized records" (see ``record`` and
+``_parse_record``) with plaintext PKCS#8 keys. File formats, passphrases and
+encryption are handled by the unprivileged ``transfer`` module; the daemon only
+validates records strictly and re-seals imported keys for the target uid.
 """
 
 from __future__ import annotations
 
+import binascii
 import errno
 import json
 import logging
 import os
 import pwd
+import re
 import socket
 import struct
 import threading
 import time
 from types import SimpleNamespace
 
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
+
 from . import cose
 from .clientpin import MAX_PIN_BYTES, MIN_PIN_LENGTH, PIN_POLICY_VIOLATION, PinError, PinManager
-from .ctap2 import Verdict, _label
+from .ctap2 import MAX_CREDENTIAL_ID_LENGTH, MAX_LABEL_LENGTH, MAX_USER_ID_LENGTH, Verdict, _label
 from .notify import ACTIVITY
-from .polkit import ACTION_MANAGE, process_subject
-from .store import StoreError
+from .polkit import ACTION_EXPORT, ACTION_MANAGE, process_subject
+from .store import Credential, StoreError, b64decode, b64encode
 
 log = logging.getLogger(__name__)
 
-MAX_REQUEST = 512 * 1024  # Full IDs for all 4096 stored credentials fit in one deletion.
+MAX_REQUEST = 16 * 1024 * 1024  # An import of 4096 RSA passkeys fits in one request.
 MIN_ID_PREFIX = 4
+MAX_RP_ID_LENGTH = 253  # the longest DNS name
+_B64URL = re.compile(r"[A-Za-z0-9_-]*={0,2}")
 
 
 class ControlError(Exception):
@@ -50,6 +62,97 @@ def describe(cred) -> dict:
         "last_used": cred.last_used,
         "deleted": cred.deleted,
     }
+
+
+def record(cred, private_key: bytes) -> dict:
+    """The normalized record of a credential, as sent by export."""
+    return {
+        "id": b64encode(cred.id),
+        "rp_id": cred.rp_id,
+        "rp_name": cred.rp_name,
+        "user_id": b64encode(cred.user_id),
+        "user_name": cred.user_name,
+        "user_display_name": cred.user_display_name,
+        "alg": cred.alg,
+        "private_key": b64encode(private_key),
+        "discoverable": cred.discoverable,
+        "cred_protect": cred.cred_protect,
+        "created": cred.created,
+    }
+
+
+def _key_matches(key, alg) -> bool:
+    if alg == cose.ES256:
+        return isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1)
+    if alg == cose.EDDSA:
+        return isinstance(key, ed25519.Ed25519PrivateKey)
+    return isinstance(key, rsa.RSAPrivateKey) and key.key_size >= 2048
+
+
+def _parse_record(index, data, store, uid) -> Credential:
+    """Validate one normalized record strictly and seal its key for ``uid``."""
+
+    def fail(problem):
+        raise ControlError(f"passkey {index + 1}: {problem}")
+
+    def field(name, kind):
+        value = data.get(name)
+        # bool is an int subclass; never accept it for a number.
+        if not isinstance(value, kind) or (kind is not bool and isinstance(value, bool)):
+            fail(f"{name} is missing or not a {getattr(kind, '__name__', 'number')}")
+        return value
+
+    def binary(name):
+        text = field(name, str)
+        try:
+            if not _B64URL.fullmatch(text):
+                raise ValueError
+            return b64decode(text.rstrip("="))
+        except (ValueError, binascii.Error):
+            fail(f"{name} is not base64url")
+
+    def label(name):
+        text = field(name, str)
+        if len(text) > MAX_LABEL_LENGTH:
+            fail(f"{name} is longer than {MAX_LABEL_LENGTH} characters")
+        return text
+
+    if not isinstance(data, dict):
+        fail("not a JSON object")
+    cred_id = binary("id")
+    if not 1 <= len(cred_id) <= MAX_CREDENTIAL_ID_LENGTH:
+        fail(f"the credential ID must be 1 to {MAX_CREDENTIAL_ID_LENGTH} bytes long")
+    user_id = binary("user_id")
+    if len(user_id) > MAX_USER_ID_LENGTH:
+        fail(f"the user ID is longer than {MAX_USER_ID_LENGTH} bytes")
+    rp_id = field("rp_id", str)
+    if not rp_id or len(rp_id) > MAX_RP_ID_LENGTH or any(ch.isspace() or not ch.isprintable() for ch in rp_id):
+        fail(f"invalid site {rp_id[:MAX_RP_ID_LENGTH]!r}")
+    alg = field("alg", int)
+    if alg not in cose.SUPPORTED_ALGORITHMS:
+        fail(f"unsupported algorithm {alg}")
+    der = binary("private_key")
+    try:
+        key = cose.private_key_from_bytes(der)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        fail("the private key cannot be read")
+    if not _key_matches(key, alg):
+        fail(f"the private key is not a valid {cose.ALGORITHM_NAMES[alg]} key")
+    cred_protect = field("cred_protect", int)
+    if cred_protect not in (1, 2, 3):
+        fail(f"invalid credProtect level {cred_protect}")
+    created = field("created", (int, float))
+    now = time.time()
+    if not 0 < created <= now:  # also catches NaN; Infinity is in the future
+        created = now
+    return Credential(
+        id=cred_id, rp_id=rp_id, user_id=user_id, alg=alg,
+        # Re-serialized and sealed here: bound to this uid and this machine.
+        sealed_key=store.seal(uid, cred_id, cose.private_key_to_bytes(key)),
+        rp_name=label("rp_name"), user_name=label("user_name"),
+        user_display_name=label("user_display_name"),
+        discoverable=field("discoverable", bool), cred_protect=cred_protect, created=float(created),
+    )
 
 
 class ControlServer:
@@ -127,11 +230,15 @@ class ControlServer:
         command = request.get("command")
         if command == "status":
             return {"ok": True, **self.status()}
-        if command not in ("list", "delete", "restore", "purge", "pin"):
+        if command not in ("list", "delete", "restore", "purge", "pin", "export", "import"):
             raise ControlError(f"unknown command {command!r}")
         target_uid, username = self._target(request.get("user"), uid)
         if command == "pin":
             return self._pin(request, pid, uid, target_uid, username)
+        if command == "export":
+            return self._export(request, pid, uid, target_uid, username)
+        if command == "import":
+            return self._import(request, pid, uid, target_uid, username)
 
         if command == "list":
             if "trash" in request and not isinstance(request["trash"], bool):
@@ -172,7 +279,7 @@ class ControlServer:
             moved = self.store.remove(target_uid, username, (c.id for c in doomed))
             log.info("Moved %d passkey(s) of uid %d to the trash at the request of uid %d",
                      len(moved), target_uid, uid)
-            self._notify_deleted(target_uid, moved, uid, "moved to the trash")
+            self._notify_change(target_uid, moved, uid, "moved to the trash")
             return {"ok": True, "deleted": [describe(c) for c in moved]}
         if command == "restore":
             restored = self.store.restore(target_uid, username, (c.id for c in doomed))
@@ -182,8 +289,54 @@ class ControlServer:
         purged = self.store.purge(target_uid, username, (c.id for c in doomed))
         log.info("Permanently deleted %d passkey(s) of uid %d at the request of uid %d",
                  len(purged), target_uid, uid)
-        self._notify_deleted(target_uid, purged, uid, "permanently deleted")
+        self._notify_change(target_uid, purged, uid, "permanently deleted")
         return {"ok": True, "purged": [describe(c) for c in purged]}
+
+    def _export(self, request, pid, uid, target_uid, username):
+        """Live passkeys only, with their keys in the clear: the caller encrypts."""
+        chosen = self._select(request, self.store.credentials(target_uid, username))
+        if request.get("dry_run"):
+            return {"ok": True, "user": username, "exported": [describe(c) for c in chosen]}
+        count = len(chosen)
+        self._approve(
+            pid, uid,
+            f"Export {count} passkey{'s' if count != 1 else ''} stored on this computer? Whoever gets "
+            "the exported file and its passphrase can sign in as you.",
+            "not exported", ACTION_EXPORT,
+        )
+        # Another request may have changed things during the dialog.
+        live = {c.id: c for c in self.store.credentials(target_uid, username)}
+        exported = [live[c.id] for c in chosen if c.id in live]
+        records = [record(c, self.store.unseal(target_uid, c)) for c in exported]
+        log.info("Exported %d passkey(s) of uid %d at the request of uid %d",
+                 len(exported), target_uid, uid)
+        self._notify_change(target_uid, exported, uid, "exported")
+        return {"ok": True, "user": username, "exported": [describe(c) for c in exported],
+                "credentials": records}
+
+    def _import(self, request, pid, uid, target_uid, username):
+        records = request.get("credentials")
+        if not isinstance(records, list):
+            raise ControlError("credentials must be a list")
+        if "dry_run" in request and not isinstance(request["dry_run"], bool):
+            raise ControlError("invalid dry_run flag")
+        creds = [_parse_record(i, data, self.store, target_uid) for i, data in enumerate(records)]
+        imported, skipped = self.store.import_credentials(target_uid, username, creds, dry_run=True)
+        if imported and not request.get("dry_run"):
+            count = len(imported)
+            self._approve(pid, uid, f"Import {count} passkey{'s' if count != 1 else ''} into this computer?",
+                          "not imported")
+            # The conflict rules are applied again: the store may have changed.
+            imported, skipped = self.store.import_credentials(target_uid, username, creds)
+            log.info("Imported %d passkey(s) into uid %d at the request of uid %d (%d skipped)",
+                     len(imported), target_uid, uid, len(skipped))
+            self._notify_change(target_uid, imported, uid, "imported", "into")
+        return {
+            "ok": True,
+            "user": username,
+            "imported": [describe(c) for c in imported],
+            "skipped": [{"credential": describe(c), "reason": reason} for c, reason in skipped],
+        }
 
     def _pin(self, request, pid, uid, target_uid, username):
         action = request.get("action")
@@ -220,14 +373,14 @@ class ControlServer:
                  "Set" if action == "set" else "Removed", target_uid, uid)
         return {"ok": True}
 
-    def _approve(self, pid, uid, message, refusal):
+    def _approve(self, pid, uid, message, refusal, action=ACTION_MANAGE):
         if uid == 0:
             return
-        verdict = self.verifier.check(process_subject(pid, uid), ACTION_MANAGE, message)
+        verdict = self.verifier.check(process_subject(pid, uid), action, message)
         if verdict is not Verdict.APPROVED:
             raise ControlError(f"{refusal}: authentication {verdict.value}")
 
-    def _notify_deleted(self, target_uid, doomed, caller_uid, what):
+    def _notify_change(self, target_uid, doomed, caller_uid, what, preposition="from"):
         if self.notifier is None or not doomed:
             return
         if len(doomed) == 1:
@@ -240,7 +393,7 @@ class ControlServer:
             self.notifier.notify(
                 SimpleNamespace(uid=target_uid),
                 f"Passkey{'' if len(doomed) == 1 else 's'} {what}",
-                f"{subject} {what} from this computer{by}.",
+                f"{subject} {what} {preposition} this computer{by}.",
                 ACTIVITY,
             )
         except Exception:

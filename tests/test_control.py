@@ -8,12 +8,17 @@ import threading
 import time
 import unittest
 
+from unittest.mock import patch
+
+from cryptography.hazmat.primitives.asymmetric import rsa
+
 from localpasskey import client, cose
 from localpasskey.clientpin import MAX_PIN_RETRIES
-from localpasskey.control import MAX_REQUEST, ControlError, ControlServer
+from localpasskey.control import MAX_REQUEST, ControlError, ControlServer, record
 from localpasskey.ctap2 import Verdict
-from localpasskey.polkit import ACTION_MANAGE
-from localpasskey.store import Credential, CredentialStore
+from localpasskey.polkit import ACTION_EXPORT, ACTION_MANAGE
+from localpasskey.store import Credential, CredentialStore, StoreError, b64encode
+from localpasskey.store import b64decode as store_b64decode
 
 
 class FakePolkit:
@@ -68,6 +73,26 @@ class ControlTests(unittest.TestCase):
 
     def handle(self, request):
         return self.server.handle(request, os.getpid(), self.uid)
+
+    def normalized(self, alg=cose.ES256, **overrides):
+        """A normalized record for the import command, as export would send it."""
+        key = cose.generate_private_key(alg if alg in cose.SUPPORTED_ALGORITHMS else cose.ES256)
+        cred_id = overrides.pop("id", os.urandom(32))
+        data = {
+            "id": b64encode(cred_id) if isinstance(cred_id, bytes) else cred_id,
+            "rp_id": "imported.example",
+            "rp_name": "Imported",
+            "user_id": b64encode(os.urandom(16)),
+            "user_name": "u",
+            "user_display_name": "U",
+            "alg": alg,
+            "private_key": b64encode(cose.private_key_to_bytes(key)),
+            "discoverable": True,
+            "cred_protect": 1,
+            "created": 1700000000.0,
+        }
+        data.update(overrides)
+        return data
 
     def test_list(self):
         listing = self.handle({"command": "list"})
@@ -124,7 +149,7 @@ class ControlTests(unittest.TestCase):
         notifier = FakeNotifier()
         self.server.notifier = notifier
         many = self.creds + [self.add(f"site{n}.example", b"x") for n in range(2)]
-        self.server._notify_deleted(self.uid, many, caller_uid=self.uid + 1, what="moved to the trash")
+        self.server._notify_change(self.uid, many, caller_uid=self.uid + 1, what="moved to the trash")
         self.assertEqual(notifier.notes, [(
             "Passkeys moved to the trash",
             "5 passkeys for example.com, other.org, site0.example, … were moved to the trash from this "
@@ -283,6 +308,198 @@ class ControlTests(unittest.TestCase):
             with self.subTest(action=action), self.assertRaises(ControlError):
                 self.handle({"command": "pin", "action": action})
         self.assertFalse(self.server.pins.is_set(self.uid, self.name))
+
+    def test_export_needs_authentication_and_reports_what_it_exported(self):
+        notifier = FakeNotifier()
+        self.server.notifier = notifier
+        prefix = self.creds[0].id.hex()[:8]
+        preview = self.handle({"command": "export", "ids": [prefix], "dry_run": True})
+        self.assertEqual([c["id"] for c in preview["exported"]], [self.creds[0].id.hex()])
+        self.assertEqual(self.polkit.checks, [], "a dry run shows no keys and asks nothing")
+
+        self.polkit.verdict = Verdict.DENIED
+        with self.assertRaisesRegex(ControlError, "not exported"):
+            self.handle({"command": "export", "ids": [prefix]})
+        self.assertEqual(notifier.notes, [])
+
+        self.polkit.verdict = Verdict.APPROVED
+        reply = self.handle({"command": "export", "ids": [prefix]})
+        self.assertEqual(self.polkit.checks[-1][:2], ("unix-process", ACTION_EXPORT))
+        self.assertEqual(
+            self.polkit.checks[-1][2],
+            "Export 1 passkey stored on this computer? Whoever gets the exported file and its "
+            "passphrase can sign in as you.",
+        )
+        [record_] = reply["credentials"]
+        self.assertEqual(record_["id"], b64encode(self.creds[0].id))
+        self.assertEqual(record_["rp_id"], "example.com")
+        self.assertEqual(record_["alg"], cose.ES256)
+        self.assertEqual(record_["private_key"],
+                         b64encode(cose.private_key_to_bytes(
+                             cose.private_key_from_bytes(
+                                 self.store.unseal(self.uid, self.creds[0])))))
+        self.assertEqual(notifier.notes[-1],
+                         ("Passkey exported",
+                          "The passkey for example.com was exported from this computer.", "activity"))
+
+    def test_export_never_includes_trashed_passkeys(self):
+        self.store.remove(self.uid, self.name, [self.creds[0].id])
+        reply = self.handle({"command": "export", "all": True, "dry_run": True})
+        self.assertEqual({c["site"] for c in reply["exported"]}, {"example.com", "other.org"})
+        with self.assertRaises(ControlError):
+            self.handle({"command": "export", "ids": [self.creds[0].id.hex()], "dry_run": True})
+
+    def test_import_dry_run_plans_without_asking_or_storing(self):
+        records = [self.normalized(), self.normalized()]
+        plan = self.handle({"command": "import", "credentials": records, "dry_run": True})
+        self.assertEqual([c["site"] for c in plan["imported"]], ["imported.example"] * 2)
+        self.assertEqual(plan["skipped"], [])
+        self.assertEqual(self.polkit.checks, [])
+        self.assertEqual(len(self.store.credentials(self.uid, self.name)), 3)
+
+    def test_import_asks_once_and_stores_the_passkeys(self):
+        notifier = FakeNotifier()
+        self.server.notifier = notifier
+        records = [self.normalized(), self.normalized()]
+        self.polkit.verdict = Verdict.DENIED
+        with self.assertRaisesRegex(ControlError, "not imported"):
+            self.handle({"command": "import", "credentials": records})
+        self.assertEqual(len(self.store.credentials(self.uid, self.name)), 3)
+        self.assertEqual(notifier.notes, [])
+
+        self.polkit.verdict = Verdict.APPROVED
+        reply = self.handle({"command": "import", "credentials": records})
+        self.assertEqual(self.polkit.checks[-1][:2], ("unix-process", ACTION_MANAGE))
+        self.assertEqual(self.polkit.checks[-1][2], "Import 2 passkeys into this computer?")
+        self.assertEqual(len(reply["imported"]), 2)
+        self.assertEqual(reply["skipped"], [])
+        stored = self.store.credentials(self.uid, self.name)[-2:]
+        self.assertEqual([c.rp_id for c in stored], ["imported.example"] * 2)
+        self.assertEqual([c.created for c in stored], [1700000000.0] * 2)
+        self.assertEqual(notifier.notes[-1],
+                         ("Passkeys imported",
+                          "2 passkeys for imported.example were imported into this computer.", "activity"))
+
+    def test_import_of_nothing_new_never_asks(self):
+        records = [self.normalized(rp_id="example.com", user_id=b64encode(b"a"), created=0)]
+        reply = self.handle({"command": "import", "credentials": records})
+        self.assertEqual(self.polkit.checks, [], "nothing to import, nothing to ask")
+        self.assertEqual(reply["imported"], [])
+        [skipped] = reply["skipped"]
+        self.assertEqual(skipped["reason"], "a passkey for this account already exists")
+        self.assertEqual(skipped["credential"]["site"], "example.com")
+
+    def test_import_reports_every_skip_reason(self):
+        trashed = self.add("gone.example", b"t")
+        self.store.remove(self.uid, self.name, [trashed.id])
+        live_id = self.creds[0].id
+        fresh = self.normalized(rp_id="fresh.example", user_id=b64encode(b"f"))
+        fresh_id = fresh["id"]
+        records = [
+            self.normalized(id=live_id, rp_id="elsewhere.example"),
+            self.normalized(id=trashed.id, rp_id="elsewhere.example"),
+            self.normalized(rp_id="example.com", user_id=b64encode(b"a")),
+            fresh,
+            self.normalized(id=fresh_id, rp_id="dup.example"),
+            self.normalized(rp_id="fresh.example", user_id=b64encode(b"f")),
+        ]
+        plan = self.handle({"command": "import", "credentials": records, "dry_run": True})
+        reply = self.handle({"command": "import", "credentials": records})
+        self.assertEqual(plan, reply)
+        self.assertEqual([c["id"] for c in reply["imported"]], [store_b64decode(fresh_id).hex()])
+        self.assertEqual([(s["credential"]["site"], s["reason"]) for s in reply["skipped"]], [
+            ("elsewhere.example", "already on this computer"),
+            ("elsewhere.example", "in the trash on this computer"),
+            ("example.com", "a passkey for this account already exists"),
+            ("dup.example", "duplicate in the file"),
+            ("fresh.example", "another passkey in the file is for the same account"),
+        ])
+        self.assertEqual(self.polkit.checks[-1][2], "Import 1 passkey into this computer?")
+
+    def test_import_skips_records_the_capacity_cannot_hold(self):
+        records = [self.normalized(rp_id=f"site{n}.example", id=b"id%d" % n) for n in range(3)]
+        with patch("localpasskey.store.MAX_CREDENTIALS_PER_USER", 4):
+            reply = self.handle({"command": "import", "credentials": records})
+        self.assertEqual(len(reply["imported"]), 1)
+        self.assertEqual([s["reason"] for s in reply["skipped"]], ["store full"] * 2)
+
+    def test_import_re_seals_keys_for_the_target_uid(self):
+        [stored] = self.handle({"command": "import", "credentials": [self.normalized()]})["imported"]
+        cred = self.store.credentials(self.uid, self.name)[-1]
+        self.assertEqual(cred.id.hex(), stored["id"])
+        self.assertEqual(cose.private_key_from_bytes(self.store.unseal(self.uid, cred)).key_size, 256)
+        with self.assertRaises(StoreError):
+            self.store.unseal(self.uid + 1, cred)
+
+    def test_import_validates_records_strictly(self):
+        for overrides in [
+            {"id": "not base64!!"},
+            {"id": ""},
+            {"id": b64encode(b"x" * 513)},
+            {"user_id": b64encode(b"x" * 65)},
+            {"user_id": 5},
+            {"rp_id": ""},
+            {"rp_id": "a" * 254},
+            {"rp_id": "exa mple.com"},
+            {"rp_id": "exa\nmple.com"},
+            {"rp_name": "x" * 256},
+            {"alg": -35},
+            {"alg": "ES256"},
+            {"alg": True},
+            {"private_key": "AAAA"},
+            {"private_key": 3},
+            {"discoverable": "yes"},
+            {"cred_protect": 0},
+            {"cred_protect": 4},
+            {"created": "yesterday"},
+        ]:
+            # The error names the offending record, here the second.
+            records = [self.normalized(), self.normalized(**overrides)]
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(ControlError, "^passkey 2: "):
+                self.handle({"command": "import", "credentials": records})
+        for request in ({"command": "import"}, {"command": "import", "credentials": {}},
+                        {"command": "import", "credentials": ["x"]},
+                        {"command": "import", "credentials": [], "dry_run": "yes"}):
+            with self.subTest(request=request), self.assertRaises(ControlError):
+                self.handle(request)
+        self.assertEqual(self.store.credentials(self.uid, self.name), self.creds)
+        self.assertEqual(self.polkit.checks, [], "bad records are refused before any prompt")
+
+    def test_import_refuses_a_key_that_does_not_match_its_algorithm(self):
+        for alg, other in ((cose.ES256, cose.EDDSA), (cose.EDDSA, cose.RS256), (cose.RS256, cose.ES256)):
+            with self.subTest(alg=alg):
+                key = cose.generate_private_key(other)
+                record_ = self.normalized(alg=alg, private_key=b64encode(cose.private_key_to_bytes(key)))
+                with self.assertRaisesRegex(ControlError, "not a valid"):
+                    self.handle({"command": "import", "credentials": [record_]})
+        small = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+        with self.assertRaisesRegex(ControlError, "not a valid RS256 key"):
+            self.handle({"command": "import", "credentials": [
+                self.normalized(alg=cose.RS256, private_key=b64encode(cose.private_key_to_bytes(small)))]})
+
+    def test_import_accepts_every_algorithm(self):
+        for alg in cose.SUPPORTED_ALGORITHMS:
+            with self.subTest(alg=alg):
+                reply = self.handle({"command": "import", "credentials": [self.normalized(alg=alg)]})
+                self.assertEqual(len(reply["imported"]), 1)
+                self.assertEqual(reply["imported"][0]["algorithm"], cose.ALGORITHM_NAMES[alg])
+
+    def test_import_keeps_a_sane_creation_time_and_replaces_an_insane_one(self):
+        now = time.time()
+        reply = self.handle({"command": "import", "credentials": [
+            self.normalized(rp_id="old.example", id=b"old", created=100.0),
+            self.normalized(rp_id="future.example", id=b"new", created=now + 86400 * 365),
+        ]})
+        created = {c["site"]: c["created"] for c in reply["imported"]}
+        self.assertEqual(created["old.example"], 100.0)
+        self.assertAlmostEqual(created["future.example"], now, delta=30)
+
+    def test_an_import_of_a_full_store_of_rsa_passkeys_fits_in_one_request(self):
+        rsa_record = self.normalized(alg=cose.RS256, user_id=b64encode(b"u" * 64),
+                                     rp_id="x" * 253, rp_name="n" * 255, user_name="n" * 255,
+                                     user_display_name="n" * 255)
+        request = {"command": "import", "credentials": [rsa_record] * 4096}
+        self.assertLess(len(json.dumps(request)) + 1, MAX_REQUEST)
 
     def test_bad_selectors(self):
         for request in ({"ids": ["ab"]}, {"ids": ["ffffffffffff"]}, {"site": "nowhere.test"}, {}):
