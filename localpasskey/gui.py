@@ -38,6 +38,11 @@ from .clientpin import MAX_PIN_RETRIES, pin_problem
 APP_ID = "org.localpasskey.Manager"
 REFRESH_MS = 5000
 PALETTE = qdarkstyle.DarkPalette
+# One sticky-note yellow for every tooltip; QDarkStyle's are blue, and a darker blue in the status bar.
+TOOLTIP_STYLE = (
+    "QToolTip, QStatusBar QToolTip { background-color: #FFF475; color: #000000;"
+    " border: 1px solid #000000; padding: 4px; opacity: 255; }"
+)
 CRED_ROLE = Qt.ItemDataRole.UserRole
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 COLUMNS = ("Website", "Account", "Last used")
@@ -1145,7 +1150,7 @@ def main(argv=None):
     QApplication.setApplicationName("LocalPasskey")
     QGuiApplication.setDesktopFileName(APP_ID)
     app = QApplication(sys.argv if argv is None else argv)
-    app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyqt6"))
+    app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyqt6") + TOOLTIP_STYLE)
     app.setWindowIcon(app_icon())
     window = Window()
     window.show()
