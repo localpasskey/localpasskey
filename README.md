@@ -182,9 +182,13 @@ exists, or when it appears twice in the file. The file is read and decrypted
 by the command as you; the service only receives the passkeys, checks them
 again and seals them for this computer and your user.
 
-`localpasskey export FILE --format cxf --unencrypted` writes a CXF file for
-other password managers. CXF files are **not encrypted**: anyone who can read
-one has your passkeys, so delete it as soon as it has been imported. The
+`localpasskey export FILE --format cxf --unencrypted` writes a file in CXF,
+the FIDO Alliance's standard exchange format: an unencrypted, portable copy
+that LocalPasskey and other tools that read CXF JSON can import. Password
+managers usually move passkeys through their own import screens or the
+operating system instead, so do not count on one reading this file. CXF files
+are **not encrypted**: anyone who can read one has your passkeys, so keep it
+somewhere safe and delete it once you no longer need it. The
 window only writes encrypted backups. CXF has no field for "security key"
 (non-discoverable) passkeys or credProtect, so they come back as ordinary
 passkeys.

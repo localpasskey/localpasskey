@@ -161,8 +161,9 @@ mode 0600, and an existing file is only replaced with
 .BR \-\-force .
 .IP
 .B \-\-format cxf
-writes the FIDO Alliance Credential Exchange Format instead, which other
-password managers read. CXF is not encrypted, so it also needs
+writes the FIDO Alliance Credential Exchange Format instead: a portable copy
+that LocalPasskey and other tools that read CXF JSON files can import (most
+password managers do not import such files directly). CXF is not encrypted, so it also needs
 .BR \-\-unencrypted ,
 and the command warns: anyone who can read the file has the passkeys.
 CXF cannot say that a passkey is a security key (non-discoverable) or carry
