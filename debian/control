@@ -29,6 +29,7 @@ Depends:
 Recommends:
  localpasskey-gui,
  polkit-1-auth-agent,
+ python3-fido2,
 Suggests:
  fido2-tools,
 Description: passkeys stored on this computer, like Windows Hello

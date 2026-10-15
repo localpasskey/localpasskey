@@ -1,0 +1,7 @@
+{
+  "name": "org.localpasskey.bridge",
+  "description": "LocalPasskey bridge for Chrome and Chromium",
+  "path": "/usr/lib/localpasskey/localpasskey-bridge",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://pocajecgdempcabeopbbdhebigifnkbf/"]
+}

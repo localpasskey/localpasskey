@@ -6,6 +6,10 @@ PYTHON ?= python3
 PKGDATADIR = $(PREFIX)/share/localpasskey
 UNITDIR = $(PREFIX)/lib/systemd/system
 MODULESLOADDIR = $(PREFIX)/lib/modules-load.d
+LIBEXECDIR = $(PREFIX)/lib/localpasskey
+CHROME_NMHDIR = $(SYSCONFDIR)/opt/chrome/native-messaging-hosts
+CHROMIUM_NMHDIR = $(SYSCONFDIR)/chromium/native-messaging-hosts
+EXTDIR = $(PKGDATADIR)/chromium-extension
 POLKITDIR = $(PREFIX)/share/polkit-1/actions
 MANDIR = $(PREFIX)/share/man
 APPDIR = $(PREFIX)/share/applications
@@ -27,6 +31,11 @@ install-service:
 	install -m 0644 $(SERVICE_MODULES) $(DESTDIR)$(PKGDATADIR)/localpasskey/
 	install -D -m 0755 bin/localpasskeyd $(DESTDIR)$(PREFIX)/sbin/localpasskeyd
 	install -D -m 0755 bin/localpasskey $(DESTDIR)$(PREFIX)/bin/localpasskey
+	install -D -m 0755 bin/localpasskey-bridge $(DESTDIR)$(LIBEXECDIR)/localpasskey-bridge
+	install -D -m 0644 data/org.localpasskey.bridge.json $(DESTDIR)$(CHROME_NMHDIR)/org.localpasskey.bridge.json
+	install -D -m 0644 data/org.localpasskey.bridge.json $(DESTDIR)$(CHROMIUM_NMHDIR)/org.localpasskey.bridge.json
+	install -d $(DESTDIR)$(EXTDIR)
+	install -m 0644 browser/chromium/manifest.json browser/chromium/service_worker.js $(DESTDIR)$(EXTDIR)/
 	install -D -m 0644 data/localpasskey.service $(DESTDIR)$(UNITDIR)/localpasskey.service
 	install -D -m 0644 data/org.localpasskey.policy $(DESTDIR)$(POLKITDIR)/org.localpasskey.policy
 	install -D -m 0644 data/modules-load.conf $(DESTDIR)$(MODULESLOADDIR)/localpasskey.conf
