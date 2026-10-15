@@ -283,7 +283,7 @@ class BitwardenTests(unittest.TestCase):
 class PassphraseProblemTests(unittest.TestCase):
     def test_cases(self):
         cases = [
-            ("", None, "Enter a passphrase"),
+            ("", None, "Enter a passphrase to encrypt your export."),
             ("1234567", None, "At least 8 characters"),
             ("12345678", None, None),
             ("12345678", "", None),

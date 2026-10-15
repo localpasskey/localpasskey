@@ -70,7 +70,7 @@ def passphrase_problem(passphrase: str, repeat: Optional[str] = None) -> Optiona
     """The first reason ``passphrase`` is not acceptable, or None if it is.
     ``repeat`` is only compared once something is typed into it."""
     if not passphrase:
-        return "Enter a passphrase"
+        return "Enter a passphrase to encrypt your export."
     if len(passphrase) < MIN_PASSPHRASE_LENGTH:
         return f"At least {MIN_PASSPHRASE_LENGTH} characters"
     if repeat and repeat != passphrase:

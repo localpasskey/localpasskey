@@ -37,7 +37,7 @@ class ExportDialogTests(unittest.TestCase):
         dialog = gui.ExportDialog(self.parent)
         red, green = gui.Feedback.BAD, gui.Feedback.GOOD
         cases = [
-            ("", "", "Enter a passphrase", red),
+            ("", "", "Enter a passphrase to encrypt your export.", red),
             ("short", "", "At least 8 characters", red),
             ("long enough", "", "Repeat the passphrase", red),
             ("long enough", "long", "The passphrases do not match", red),
