@@ -251,6 +251,19 @@ def cmd_export(args):
     return 0
 
 
+def planned_records(records, planned):
+    """The records the user saw in the import plan, once each: a duplicate in
+    the file was already reported as skipped."""
+    wanted = {cred["id"] for cred in planned}
+    chosen = []
+    for record in records:
+        cred_id = transfer.describe(record)["id"]
+        if cred_id in wanted:
+            wanted.discard(cred_id)
+            chosen.append(record)
+    return chosen
+
+
 def _print_skipped(skipped):
     rows = [(s["credential"].get("id", "")[:12] or "-", s["credential"].get("site") or "-",
              _account(s["credential"]), s["reason"]) for s in skipped]
@@ -286,14 +299,7 @@ def cmd_import(args):
     if not args.yes and input(f"Import {what}? [y/N] ").strip().lower() not in ("y", "yes"):
         print("Nothing imported.")
         return 1
-    # Send only the passkeys the user saw in the plan.
-    wanted = {cred["id"] for cred in plan["imported"]}
-    chosen = []
-    for record in records:
-        cred_id = transfer.describe(record)["id"]
-        if cred_id in wanted:
-            wanted.discard(cred_id)  # a duplicate in the file was already reported as skipped
-            chosen.append(record)
+    chosen = planned_records(records, plan["imported"])
     result = _ask(_with_user({"command": "import", "credentials": chosen}, args), args)
     late = len(result["skipped"])
     print(f"Imported {_plural(len(result['imported']))}"

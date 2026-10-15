@@ -5,7 +5,9 @@ Everything goes through localpasskeyd's control socket, so the window only
 sees the current user's passkeys, and deleting one makes the service ask for
 the user's password first. Deleted passkeys wait in the trash view until they
 are restored or permanently deleted, and the PIN browsers ask for can be set
-or removed here too.
+or removed here too. Passkeys can be exported to an encrypted backup and
+imported from one (or from CXF and Bitwarden files); the files are read,
+written and encrypted here, never by the service.
 """
 
 from __future__ import annotations
@@ -22,12 +24,14 @@ from PyQt6.QtGui import (
     QStandardItem, QStandardItemModel,
 )
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QSplitter,
-    QStackedWidget, QStyle, QTreeView, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QPlainTextEdit, QPushButton, QRadioButton, QSplitter, QStackedWidget, QStyle, QTreeView, QVBoxLayout,
+    QWidget,
 )
 
-from . import __version__
+from . import __version__, transfer
+from .cli import planned_records, write_private_file
 from .client import ServiceUnavailable, request
 from .clientpin import pin_problem
 
@@ -442,6 +446,94 @@ class PinDialog(QDialog):
         self.window.tasks.run(lambda: request({"command": "pin", "action": "status"}), self._on_loaded)
 
 
+class ExportDialog(QDialog):
+    """Choose what to export and the passphrase that encrypts the backup."""
+
+    def __init__(self, window, site=None):
+        super().__init__(window)
+        self.setWindowTitle("Export Passkeys")
+        intro = QLabel(
+            "The backup holds the private keys of your passkeys, encrypted with this passphrase. "
+            "Whoever has the file and the passphrase can sign in as you."
+        )
+        intro.setTextFormat(Qt.TextFormat.PlainText)
+        intro.setWordWrap(True)
+        self.all = QRadioButton("All passkeys")
+        self.site = QRadioButton(f"Passkeys for {site}" if site else "Passkeys for the selected website")
+        self.site.setEnabled(bool(site))
+        (self.site if site else self.all).setChecked(True)
+        self._site = site
+        scope = QButtonGroup(self)
+        scope.addButton(self.all)
+        scope.addButton(self.site)
+        self.passphrase = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
+        self.repeat = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
+        form = QFormLayout()
+        form.addRow("Passphrase", self.passphrase)
+        form.addRow("Repeat", self.repeat)
+        self.feedback = Feedback()
+        buttons = QDialogButtonBox()
+        self.export_button = buttons.addButton("Export…", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(intro)
+        layout.addWidget(self.all)
+        layout.addWidget(self.site)
+        layout.addLayout(form)
+        layout.addWidget(self.feedback)
+        layout.addWidget(buttons)
+        for field in (self.passphrase, self.repeat):
+            field.textChanged.connect(self._sync)
+        self._sync()
+
+    def _sync(self, *_):
+        problem = transfer.passphrase_problem(self.passphrase.text(), self.repeat.text())
+        if problem is None and not self.repeat.text():
+            problem = "Repeat the passphrase"
+        self.feedback.show_problem(problem, "Passphrase is valid")
+        self.export_button.setEnabled(problem is None)
+
+    def selector(self):
+        return {"site": self._site} if self.site.isChecked() else {"all": True}
+
+
+def plan_text(imported, skipped) -> str:
+    """The import plan as plain text: one line per passkey."""
+    def line(cred):
+        return f"{cred.get('site') or '?'}  {account_label(cred)}"
+
+    lines = [f"Will be imported ({len(imported)}):", *(f"  {line(c)}" for c in imported)]
+    if skipped:
+        lines += ["", f"Skipped ({len(skipped)}):"]
+        lines += [f"  {line(s['credential'])}: {s['reason']}" for s in skipped]
+    return "\n".join(lines)
+
+
+class ImportDialog(QDialog):
+    """What an import will add and what it skips, before anything is asked."""
+
+    def __init__(self, window, imported, skipped):
+        super().__init__(window)
+        self.setWindowTitle("Import Passkeys")
+        n = len(imported)
+        heading = QLabel(f"Import {n} passkey{'s' if n != 1 else ''}?" if n else "Nothing to import.")
+        heading.setTextFormat(Qt.TextFormat.PlainText)
+        self.plan = QPlainTextEdit(plan_text(imported, skipped), readOnly=True)
+        self.plan.setMinimumSize(480, 240)
+        buttons = QDialogButtonBox()
+        self.import_button = buttons.addButton("Import", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.import_button.setEnabled(bool(imported))
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel if n else QDialogButtonBox.StandardButton.Close)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(heading)
+        layout.addWidget(self.plan)
+        layout.addWidget(buttons)
+
+
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -532,6 +624,9 @@ class Window(QMainWindow):
 
         file_menu = self.menuBar().addMenu("&File")
         action(file_menu, "&Refresh", self.refresh, QKeySequence.StandardKey.Refresh)
+        file_menu.addSeparator()
+        action(file_menu, "&Import Passkeys…", self.import_passkeys)
+        self.export_action = action(file_menu, "&Export Passkeys…", self.export_passkeys)
         file_menu.addSeparator()
         action(file_menu, "Security Key &PIN…", self.show_pin_dialog)
         file_menu.addSeparator()
@@ -844,6 +939,108 @@ class Window(QMainWindow):
     def _error(self, error):
         message = str(error)
         self.statusBar().showMessage(message[:1].upper() + message[1:], 6000)
+
+    def _start(self, note):
+        """Mark the window busy for an import or export; False if it already is."""
+        if self._busy:
+            return False
+        self._busy = True
+        self.statusBar().showMessage(note)
+        self._resync()
+        return True
+
+    def _finish(self, error=None, done=None):
+        self._busy = False
+        self._resync()
+        if error is not None:
+            self._error(error)
+        elif done:
+            self.statusBar().showMessage(done, 4000)
+        self.refresh()
+
+    def export_passkeys(self):
+        if self._busy:
+            return
+        cred = self.details.cred if self._selected_id and not self._trash else None
+        dialog = ExportDialog(self, cred["site"] if cred else None)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        default = os.path.join(os.path.expanduser("~"), f"localpasskey-{date.today():%Y-%m-%d}{transfer.BACKUP_SUFFIX}")
+        # The save dialog has already asked before replacing an existing file.
+        path, _ = QFileDialog.getSaveFileName(self, "Export Passkeys", default,
+                                              f"LocalPasskey backup (*{transfer.BACKUP_SUFFIX})")
+        if not path or not self._start("Waiting for you to authenticate…"):
+            return
+        selector, passphrase = dialog.selector(), dialog.passphrase.text()
+
+        def work():
+            records = request({"command": "export", **selector})["credentials"]
+            write_private_file(path, transfer.export_backup(records, passphrase), overwrite=True)
+            return len(records)
+
+        self.tasks.run(work, lambda count, error: self._finish(
+            error, f"Exported {count} passkey{'s' if count != 1 else ''}"))
+
+    def import_passkeys(self):
+        if self._busy:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Passkeys", os.path.expanduser("~"),
+            f"LocalPasskey backup (*{transfer.BACKUP_SUFFIX});;CXF or Bitwarden JSON (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "rb") as stream:
+                data = stream.read()
+            encrypted = transfer.detect_format(data) == "localpasskey"
+        except (OSError, transfer.TransferError) as e:
+            self._error(e.strerror if isinstance(e, OSError) and e.strerror else e)
+            return
+        self._load_import(data, encrypted)
+
+    def _load_import(self, data, encrypted, retry=False):
+        passphrase = ""
+        if encrypted:
+            label = "Wrong passphrase. Try again:" if retry else "Passphrase of the backup:"
+            passphrase, ok = QInputDialog.getText(self, "Import Passkeys", label, QLineEdit.EchoMode.Password)
+            if not ok:
+                return
+        if not self._start("Reading the file…"):
+            return
+
+        def work():
+            records = transfer.load(data, lambda: passphrase)
+            plan = request({"command": "import", "credentials": records, "dry_run": True})
+            return records, plan
+
+        def loaded(result, error):
+            if isinstance(error, transfer.WrongPassphrase):
+                self._finish()
+                self._load_import(data, encrypted, retry=True)
+                return
+            if error is not None:
+                self._finish(error)
+                return
+            self._finish()
+            records, plan = result
+            dialog = ImportDialog(self, plan["imported"], records.skipped + plan["skipped"])
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            self._send_import(records, plan["imported"])
+
+        self.tasks.run(work, loaded)
+
+    def _send_import(self, records, planned):
+        chosen = planned_records(records, planned)
+        if not self._start("Waiting for you to authenticate…"):
+            return
+
+        def done(result, error):
+            n = len(result["imported"]) if result else 0
+            self._finish(error, f"Imported {n} passkey{'s' if n != 1 else ''}")
+
+        self.tasks.run(lambda: request({"command": "import", "credentials": chosen}), done)
 
     def show_pin_dialog(self):
         PinDialog(self).exec()
