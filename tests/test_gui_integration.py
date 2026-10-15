@@ -445,8 +445,9 @@ class WindowTests(unittest.TestCase):
             self.wait_for(lambda: dialog.status.text() == "No PIN is set.")
             QTest.keyClicks(dialog.pin, "123")
             QTest.keyClicks(dialog.repeat, "123")
+            self.assertEqual(dialog.feedback.text(), "At least 4 characters")
+            self.assertFalse(dialog.set_button.isEnabled())
             QTest.mouseClick(dialog.set_button, Qt.MouseButton.LeftButton)
-            self.wait_for(lambda: "at least 4 characters" in self.window.statusBar().currentMessage())
             self.assertEqual(dialog.status.text(), "No PIN is set.")
             dialog.reject()
 

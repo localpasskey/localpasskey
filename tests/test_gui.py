@@ -1,9 +1,13 @@
+import os
 import unittest
 from datetime import date, datetime
+from types import SimpleNamespace
+from unittest.mock import patch
 
 try:
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QStandardItemModel
+    from PyQt6.QtWidgets import QApplication, QWidget
 
     from localpasskey import gui
 except ImportError:  # PyQt6 or QDarkStyle not installed
@@ -83,6 +87,63 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(first(), "zed")
         proxy.set_query("nobody")
         self.assertIsNone(first())
+
+
+@unittest.skipIf(gui is None, "PyQt6 and QDarkStyle are not installed")
+class PinDialogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}):
+            cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.window = QWidget()
+        self.window.tasks = SimpleNamespace(run=lambda work, done: None)  # the daemon never answers
+        self.dialog = gui.PinDialog(self.window)
+
+    def tearDown(self):
+        self.window.deleteLater()
+
+    def type(self, pin, repeat):
+        self.dialog.pin.setText(pin)
+        self.dialog.repeat.setText(repeat)
+        return self.dialog.feedback.text(), self.dialog.feedback.styleSheet(), self.dialog.set_button.isEnabled()
+
+    def test_set_pin_stays_dark_until_the_daemon_answers(self):
+        self.assertEqual(self.dialog.status.text(), "Checking…")
+        self.type("1234", "1234")
+        self.assertFalse(self.dialog.set_button.isEnabled())
+        self.dialog.show_state(True, 5)
+        self.assertEqual(self.dialog.status.text(), "A PIN is set (5 attempts left).")
+        self.assertTrue(self.dialog.set_button.isEnabled())
+
+    def test_feedback_names_the_first_problem_on_every_keystroke(self):
+        self.dialog.show_state(False, 8)
+        red, green = gui.Feedback.BAD, gui.Feedback.GOOD
+        cases = [
+            ("", "", "Enter a PIN", red),
+            ("123", "", "At least 4 characters", red),
+            ("123", "999", "At least 4 characters", red),
+            ("a" * 64, "", "At most 63 bytes", red),
+            ("12\x0034", "", "No NUL characters", red),
+            ("1234", "", "Repeat the PIN", red),
+            ("1234", "12", "The PINs do not match", red),
+            ("1234", "1234", "PIN is valid", green),
+            ("äöüß", "äöüß", "PIN is valid", green),
+        ]
+        for pin, repeat, text, colour in cases:
+            with self.subTest(pin=pin, repeat=repeat):
+                shown, style, enabled = self.type(pin, repeat)
+                self.assertEqual(shown, text)
+                self.assertIn(colour, style)
+                self.assertEqual(enabled, colour == green)
+
+    def test_busy_dialog_keeps_set_pin_disabled(self):
+        self.dialog.show_state(False, 8)
+        self.type("1234", "1234")
+        self.dialog._request("set")
+        self.assertFalse(self.dialog.set_button.isEnabled())
+        self.assertEqual(self.dialog.feedback.text(), "PIN is valid")
 
 
 if __name__ == "__main__":

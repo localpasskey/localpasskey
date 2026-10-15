@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 
 from . import __version__
 from .client import ServiceUnavailable, request
+from .clientpin import pin_problem
 
 APP_ID = "org.localpasskey.Manager"
 REFRESH_MS = 5000
@@ -326,6 +327,22 @@ class Message(QWidget):
         self.text.setVisible(bool(text))
 
 
+class Feedback(QLabel):
+    """A plain-text line that says what is wrong with a field as the user types."""
+
+    BAD = "#e06c75"  # QDarkStyle has no red or green; these read well on its background
+    GOOD = "#98c379"
+
+    def __init__(self):
+        super().__init__()
+        self.setTextFormat(Qt.TextFormat.PlainText)
+
+    def show_problem(self, problem, fine):
+        """Show ``problem`` in red, or ``fine`` in green if there is none."""
+        self.setText(problem or fine)
+        self.setStyleSheet(f"color: {self.BAD if problem else self.GOOD};")
+
+
 class PinDialog(QDialog):
     """Set or remove the PIN browsers ask for before they list or delete passkeys."""
 
@@ -347,6 +364,7 @@ class PinDialog(QDialog):
         form = QFormLayout()
         form.addRow("New PIN", self.pin)
         form.addRow("Repeat", self.repeat)
+        self.feedback = Feedback()
         self.set_button = QPushButton("Set PIN")
         self.set_button.clicked.connect(lambda: self._request("set"))
         self.remove_button = QPushButton("Remove PIN")
@@ -362,6 +380,7 @@ class PinDialog(QDialog):
         layout.addWidget(self.status)
         layout.addWidget(self.why)
         layout.addLayout(form)
+        layout.addWidget(self.feedback)
         layout.addLayout(buttons)
         for field in (self.pin, self.repeat):
             field.textChanged.connect(self._sync)
@@ -374,8 +393,11 @@ class PinDialog(QDialog):
         self.window.tasks.run(lambda: request({"command": "pin", "action": "status"}), self._on_loaded)
 
     def _sync(self, *_):
-        filled = bool(self.pin.text()) and self.pin.text() == self.repeat.text()
-        self.set_button.setEnabled(filled and not self.busy)
+        problem = pin_problem(self.pin.text(), self.repeat.text())
+        if problem is None and not self.repeat.text():
+            problem = "Repeat the PIN"  # never green while Set PIN is still greyed out
+        self.feedback.show_problem(problem, "PIN is valid")
+        self.set_button.setEnabled(problem is None and not self.busy)
 
     def show_state(self, is_set, retries):
         self.busy = False
