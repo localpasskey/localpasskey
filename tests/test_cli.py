@@ -298,8 +298,12 @@ class CliTransferTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
         self.fixture.server.start()
-        self.tmp = self.enterContext(tempfile.TemporaryDirectory())
-        self.enterContext(patch("localpasskey.cli._start_tty_agent", return_value=None))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = tmp.name
+        agent = patch("localpasskey.cli._start_tty_agent", return_value=None)
+        agent.start()
+        self.addCleanup(agent.stop)
 
     def run_cli(self, *args, passphrases=(), typed=()):
         with (
