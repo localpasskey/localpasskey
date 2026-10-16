@@ -9,16 +9,19 @@ user: the daemon only ever sees normalized records.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 from . import transfer
 from .client import ServiceError, request, socket_path
+from .store import _fsync_dir
 
 
 class CliError(Exception):
@@ -188,26 +191,32 @@ def cmd_pin(args):
 
 
 def write_private_file(path, data, overwrite=False):
-    """Write ``data`` readable by the owner only. Without ``overwrite`` an
-    existing file is an error; with it, the old file is replaced atomically."""
+    """Write ``data`` readable by the owner only, and on disk before this
+    returns. Without ``overwrite`` an existing file is an error; with it, the
+    old file is replaced atomically."""
     if overwrite:
-        directory = os.path.dirname(os.path.abspath(path))
-        temporary = os.path.join(directory, f".{os.path.basename(path)}.{os.getpid()}.tmp")
-        _write_new(temporary, data)
+        fd, temporary = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)),
+                                         prefix=f".{os.path.basename(path)}.", suffix=".tmp")
+        _fill(fd, temporary, data)
         try:
             os.replace(temporary, path)
-        except OSError:
-            os.unlink(temporary)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary)  # gone already if the rename finished before the interrupt
             raise
     else:
-        _write_new(path, data)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        _fill(fd, path, data)
+    with contextlib.suppress(OSError):  # the file itself is synced; some directories refuse fsync
+        _fsync_dir(os.path.dirname(os.path.abspath(path)))
 
 
-def _write_new(path, data):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+def _fill(fd, path, data):
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
     except BaseException:
         os.unlink(path)  # never leave half a backup behind
         raise

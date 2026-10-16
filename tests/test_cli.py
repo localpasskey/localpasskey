@@ -1,4 +1,5 @@
 import contextlib
+import errno
 import io
 import json
 import os
@@ -201,6 +202,40 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("\x07", output.getvalue())
         self.assertEqual(len(output.getvalue().splitlines()), 2)
 
+
+    def test_write_private_file_never_follows_links_or_leaves_half_a_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target, victim = os.path.join(tmp, "keys"), os.path.join(tmp, "victim")
+            os.symlink(victim, target)
+            with self.assertRaises(FileExistsError):
+                cli.write_private_file(target, b"secret")
+            self.assertFalse(os.path.lexists(victim))
+            with open(victim, "w") as stream:
+                stream.write("victim")
+            stale = os.path.join(tmp, f".keys.{os.getpid()}.tmp")
+            open(stale, "w").close()  # left by an earlier run that was killed
+            cli.write_private_file(target, b"secret", overwrite=True)
+            os.unlink(stale)
+            with open(victim) as stream:
+                self.assertEqual(stream.read(), "victim")
+            self.assertFalse(os.path.islink(target))
+            self.assertEqual(os.stat(target).st_mode & 0o777, 0o600)
+            real_fdopen = os.fdopen
+
+            def full_disk(fd, mode):
+                stream = real_fdopen(fd, mode)
+                stream.write = lambda data: (_ for _ in ()).throw(OSError(errno.ENOSPC, "No space left"))
+                return stream
+            with patch("os.fdopen", full_disk):
+                with self.assertRaises(OSError):
+                    cli.write_private_file(target, b"new", overwrite=True)
+                with self.assertRaises(OSError):
+                    cli.write_private_file(os.path.join(tmp, "fresh"), b"new")
+            with patch("os.replace", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+                cli.write_private_file(target, b"new", overwrite=True)
+            with open(target, "rb") as stream:
+                self.assertEqual(stream.read(), b"secret")
+            self.assertEqual(sorted(os.listdir(tmp)), ["keys", "victim"])
 
 class CliProcessTests(unittest.TestCase):
     def setUp(self):
