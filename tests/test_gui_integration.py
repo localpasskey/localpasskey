@@ -146,6 +146,26 @@ class WindowTests(unittest.TestCase):
         self.window.table.sortByColumn(2, Qt.SortOrder.DescendingOrder)
         self.assertEqual(self.window.proxy.index(0, 0).data(gui.CRED_ROLE)["id"], selected)
 
+    def test_a_refresh_asked_for_during_a_load_runs_after_it(self):
+        read, gate, real = threading.Event(), threading.Event(), gui.request
+
+        def slow(payload):
+            result = real(payload)
+            if payload["command"] == "list" and not gate.is_set():
+                read.set()
+                gate.wait(5)  # this load has read the store before the change below
+            return result
+
+        with patch.object(gui, "request", slow):
+            self.window.refresh()
+            self.assertTrue(read.wait(5))
+            doomed = self.window._creds[0]["id"]
+            self.server.store.remove(self.uid, self.username, [bytes.fromhex(doomed)])
+            self.window.refresh()
+            gate.set()
+            self.wait_for(lambda: not self.window._refreshing and len(self.window._creds) == 6)
+        self.assertNotIn(doomed, [cred["id"] for cred in self.window._creds])
+
     def test_copy_and_open_use_the_selected_credential(self):
         self.window.search.setText("github the octocat")
         self.window.copy_action.trigger()

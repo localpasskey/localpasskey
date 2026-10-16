@@ -598,6 +598,7 @@ class Window(QMainWindow):
         self._creds = None
         self._selected_id = None
         self._refreshing = False
+        self._refresh_again = False
         self._busy = False
         self._moving = True  # what set_busy says while busy: "Moving…" unless an import or export runs
         self._trash = False
@@ -740,6 +741,7 @@ class Window(QMainWindow):
 
     def refresh(self):
         if self._refreshing:
+            self._refresh_again = True  # the running load may have read the store before a change
             return
         self._refreshing = True
         trashed = self._trash
@@ -760,7 +762,8 @@ class Window(QMainWindow):
 
     def _on_loaded(self, result, error, trashed=False):
         self._refreshing = False
-        if trashed != self._trash:  # the view changed while the request was in flight
+        if self._refresh_again or trashed != self._trash:  # a change or a view switch came in while loading
+            self._refresh_again = False
             self.refresh()
             return
         if error is not None:
