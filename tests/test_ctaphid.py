@@ -146,6 +146,21 @@ class RawTransportTests(unittest.TestCase):
         self.assertTrue(keepalives)
         self.assertEqual(keepalives[0][7], STATUS.UPNEEDED)
 
+    def test_init_on_a_busy_channel_cancels_the_prompt(self):
+        self.h.verifier.delay = 10
+        self.h.store.add(self.h.requester.uid, self.h.requester.username, _resident_credential(self.h))
+        request = bytes([0x02]) + bytes.fromhex("a2016b6578616d706c652e636f6d025820") + b"\0" * 32
+        self.transport.handle_report(init_packet(self.cid, ctaphid.CMD_CBOR, request))
+        deadline = time.monotonic() + 2
+        while not self.h.verifier.messages and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.transport.handle_report(init_packet(self.cid, ctaphid.CMD_INIT, os.urandom(8)))
+        self.assertTrue(self.h.verifier.saw_cancel.wait(2))
+        while not self.reports.empty():
+            self.reports.get()
+        self.transport.handle_report(init_packet(self.cid, ctaphid.CMD_PING, b"hi"))
+        self.assertEqual(self.read()[4:9], bytes([0x80 | ctaphid.CMD_PING, 0, 2]) + b"hi")
+
 
 def _resident_credential(h):
     from localpasskey import cose
