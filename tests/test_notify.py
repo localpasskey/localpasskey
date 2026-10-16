@@ -23,7 +23,9 @@ class NotificationTests(unittest.TestCase):
         ):
             DesktopNotifier().notify(SimpleNamespace(uid=account.pw_uid), "Title", "<b>A&B</b>")
         args, kwargs = popen.call_args
-        self.assertEqual(args[0][4:6], ["Title", "&lt;b&gt;A&amp;B&lt;/b&gt;"])
+        popen.return_value.stdin.write.assert_called_once_with("Title\0&lt;b&gt;A&amp;B&lt;/b&gt;".encode())
+        self.assertEqual(kwargs["stdin"], subprocess.PIPE)
+        self.assertNotIn("Title", args[0])
         self.assertEqual(args[0][1:3], ["-I", "-c"])
         self.assertEqual(kwargs["user"], account.pw_uid)
         self.assertEqual(kwargs["group"], account.pw_gid)
@@ -41,7 +43,7 @@ class NotificationTests(unittest.TestCase):
             patch("localpasskey.notify.threading.Thread"),
         ):
             notifier.notify(SimpleNamespace(uid=os.getuid()), "Title", "Body", kind)
-        return popen.call_args.args[0][6:] if popen.called else None
+        return popen.call_args.args[0][4:] if popen.called else None
 
     def test_kinds_choose_icon_urgency_and_transience(self):
         notifier = DesktopNotifier()

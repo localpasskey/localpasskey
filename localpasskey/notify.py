@@ -35,7 +35,8 @@ _STYLES = {
 _HELPER = """
 import sys
 from gi.repository import Gio, GLib
-summary, body, icon, urgency, transient = sys.argv[1:6]
+summary, body = sys.stdin.buffer.read().decode("utf-8").split("\\0", 1)
+icon, urgency, transient = sys.argv[1:4]
 hints = {
     "urgency": GLib.Variant("y", int(urgency)),
     "transient": GLib.Variant("b", transient == "1"),
@@ -80,19 +81,22 @@ class DesktopNotifier:
             "PATH": "/usr/bin:/bin",
             "LANG": os.environ.get("LANG", "C.UTF-8"),
         }
+        # The text goes on stdin: any local user can read argv in /proc.
         proc = subprocess.Popen(
-            [
-                sys.executable, "-I", "-c", _HELPER,
-                summary, html.escape(body, quote=False), icon, str(urgency), "1" if transient else "0",
-            ],
+            [sys.executable, "-I", "-c", _HELPER, icon, str(urgency), "1" if transient else "0"],
             user=account.pw_uid,
             group=account.pw_gid,
             extra_groups=[],
             env=env,
             cwd="/",
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        try:
+            proc.stdin.write(f"{summary}\0{html.escape(body, quote=False)}".encode())
+            proc.stdin.close()
+        except OSError:  # helper already gone; the reaper still collects it
+            pass
         threading.Thread(target=_reap, args=(proc,), daemon=True).start()
