@@ -242,21 +242,26 @@ class CredentialStore:
         ]
 
     def add(self, uid: int, username: str, cred: Credential) -> None:
-        """Store ``cred``; a discoverable credential replaces any older live
-        discoverable one for the same site and account, as CTAP requires."""
+        """Store ``cred``; a discoverable credential replaces (moves to the
+        trash) any older live discoverable one for the same site and account,
+        as CTAP requires."""
         with self._lock:
             creds = self._read(uid, username)
             if cred.discoverable:
-                creds = [
+                replaced = [
                     c
                     for c in creds
-                    if not (
-                        c.discoverable
-                        and c.deleted is None
-                        and c.rp_id == cred.rp_id
-                        and c.user_id == cred.user_id
-                    )
+                    if c.discoverable
+                    and c.deleted is None
+                    and c.rp_id == cred.rp_id
+                    and c.user_id == cred.user_id
                 ]
+                if replaced and len(creds) >= MAX_CREDENTIALS_PER_USER:
+                    # No room to keep the old one in the trash: drop it, as CTAP allows.
+                    creds = [c for c in creds if all(c is not r for r in replaced)]
+                now = time.time()
+                for c in replaced:
+                    c.deleted = now
             if len(creds) >= MAX_CREDENTIALS_PER_USER:
                 raise StoreFull(f"uid {uid} already has {len(creds)} credentials")
             creds.append(cred)

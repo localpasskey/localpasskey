@@ -105,6 +105,13 @@ class StoreTests(unittest.TestCase):
             self.store.add(1000, "alice", replacement)
             self.assertEqual(self.store.credentials(1000, "alice"), [other, replacement])
 
+    def test_a_replaced_passkey_goes_to_the_trash(self):
+        old, new = self.credential(1000), self.credential(1000)
+        self.store.add(1000, "alice", old)
+        self.store.add(1000, "alice", new)
+        self.assertEqual(self.store.credentials(1000, "alice"), [new])
+        self.assertEqual([c.id for c in self.store.trash(1000, "alice")], [old.id])
+
     def test_all_key_algorithms_survive_storage(self):
         for alg in cose.SUPPORTED_ALGORITHMS:
             with self.subTest(alg=alg):
