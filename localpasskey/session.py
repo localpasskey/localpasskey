@@ -79,26 +79,23 @@ def processes_with_open(path: str) -> List[int]:
     return pids
 
 
-def process_uid(pid: int) -> Optional[int]:
+def _status_field(pid: int, key: str) -> Optional[int]:
     try:
         with open(f"/proc/{pid}/status") as f:
             for line in f:
-                if line.startswith("Uid:"):
+                if line.startswith(key):
                     return int(line.split()[1])
     except (OSError, ValueError, IndexError):
         pass
     return None
+
+
+def process_uid(pid: int) -> Optional[int]:
+    return _status_field(pid, "Uid:")
 
 
 def parent_pid(pid: int) -> Optional[int]:
-    try:
-        with open(f"/proc/{pid}/status") as f:
-            for line in f:
-                if line.startswith("PPid:"):
-                    return int(line.split()[1])
-    except (OSError, ValueError, IndexError):
-        pass
-    return None
+    return _status_field(pid, "PPid:")
 
 
 def _runs_bridge(pid: int) -> bool:
