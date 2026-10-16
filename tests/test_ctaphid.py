@@ -88,9 +88,10 @@ class RawTransportTests(unittest.TestCase):
         self.assertEqual(reply[:7], struct.pack(">IBH", self.cid, 0x80 | ctaphid.CMD_PING, 100))
         self.assertEqual(reply[7:64] + reply[69:112], payload)
 
+    @patch("localpasskey.ctaphid.MESSAGE_TIMEOUT", 0.1)
     def test_incomplete_message_times_out(self):
         self.transport.handle_report(init_packet(self.cid, ctaphid.CMD_PING, b"x" * 57, length=100))
-        reply = self.read(timeout=ctaphid.MESSAGE_TIMEOUT + 2)
+        reply = self.read()
         self.assertEqual(reply[4:8], bytes([0xBF, 0, 1, ctaphid.ERR_MSG_TIMEOUT]))
 
     def test_u2f_messages_are_not_supported(self):
