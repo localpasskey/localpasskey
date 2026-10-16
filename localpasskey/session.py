@@ -171,7 +171,6 @@ class RequesterResolver:
                     log.warning("Could not identify a process with the authenticator open; denying the request")
                     return None
                 openers.append((pid, uid))
-        active = self._logind.active_session()
 
         user_openers = [(pid, uid) for pid, uid in openers if uid != 0]
         uids = {uid for _, uid in user_openers}
@@ -185,7 +184,7 @@ class RequesterResolver:
             return None
         else:
             return None
-        if active != uid:
+        if self._logind.active_session() != uid:
             log.warning("The authenticator's user is not in the active local session; denying the request")
             return None
 
