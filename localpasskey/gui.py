@@ -275,9 +275,10 @@ class Details(QFrame):
 
         self.trash_buttons = QHBoxLayout()
         self.restore_button = QPushButton("Restore")
-        self.restore_button.clicked.connect(self._restore_clicked)
+        self.restore_button.clicked.connect(lambda: window._send(
+            {"command": "restore", "ids": [self.cred["id"]]}, "Restoring…", "Passkey restored"))
         self.purge_button = QPushButton("Delete Permanently…")
-        self.purge_button.clicked.connect(self._purge_clicked)
+        self.purge_button.clicked.connect(lambda: window.confirm_purge(self.cred))
         self.trash_buttons.addWidget(self.restore_button)
         self.trash_buttons.addWidget(self.purge_button)
         self.trash_buttons.addStretch(1)
@@ -290,16 +291,6 @@ class Details(QFrame):
         layout.addLayout(buttons)
         layout.addLayout(self.trash_buttons)
         layout.addStretch(1)
-
-    @property
-    def window(self):
-        return self.parentWidget().window()
-
-    def _restore_clicked(self):  # the button belongs to this pane, the request to the window
-        self.window._send({"command": "restore", "ids": [self.cred["id"]]}, "Restoring…", "Passkey restored")
-
-    def _purge_clicked(self):
-        self.window.confirm_purge(self.cred)
 
     def _row(self, title, copy=None):
         value = QLabel()
