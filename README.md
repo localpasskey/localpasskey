@@ -286,8 +286,12 @@ refused by a site that checks counters; register a new passkey there instead.
 * The polkit action `org.localpasskey.authenticate` defaults to `auth_self`.
   Never relax it to `yes` in a polkit rule: any website could then use your
   passkeys silently.
-* Requests are refused when the browser doesn't run in the active local session,
-  or when the daemon can't tell which user sent them.
+* Requests are refused unless the processes holding the virtual key open (root's
+  aside) all belong to the user of the active local session, or when the daemon
+  can't tell which user they belong to. The daemon can't tell which of those
+  processes sent a request, so another process of yours that opens the key (an
+  SSH login, a user service) can still raise the dialog on your desktop, where it
+  may name another of your processes or just "An application".
 
 ## Configuration
 
