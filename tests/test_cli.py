@@ -76,6 +76,27 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(len(sent), 2 if expected == 0 else 1, "a mismatch must not reach the daemon")
                 self.assertEqual(sent[0]["dry_run"], True)
 
+    def test_purge_and_errors_do_not_echo_control_characters(self):
+        credential = {
+            "id": "1234" * 16, "site": "evil\u200b.example\x1b]0;pwned\x07", "deleted": 1000.0, "created": 0,
+            "user_name": "alice", "display_name": "Alice", "discoverable": True, "last_used": 0,
+        }
+        with (
+            patch("localpasskey.cli.request", return_value={"deleted": [credential]}),
+            patch("localpasskey.cli.input", return_value="evil.example]0;pwned\n", create=True) as typed,
+            patch("localpasskey.cli._start_tty_agent", return_value=None),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(cli.main(["purge", "1234"]), 0)
+        for text in (typed.call_args.args[0], output.getvalue()):
+            self.assertFalse(any(ch in text for ch in "\x1b\x07\u200b"))
+        with (
+            patch("localpasskey.cli.request", side_effect=cli.ServiceError("bad site: \x1b]0;pwned\x07")),
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            self.assertEqual(cli.main(["list"]), 1)
+        self.assertNotIn("\x1b", errors.getvalue())
+
     def test_user_selection_reaches_the_daemon(self):
         credential = {
             "id": "1234" * 16, "site": "example.com", "deleted": 1000.0, "created": 0,

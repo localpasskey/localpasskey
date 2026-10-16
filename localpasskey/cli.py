@@ -158,7 +158,7 @@ def cmd_purge(args):
     # The site is the one identifier every passkey has: the account name is
     # optional in CTAP and often empty. Uniqueness is not needed because the
     # passkey is already pinned by the ID in the table above.
-    site = doomed["site"]
+    site = "".join(ch for ch in doomed["site"] if ch.isprintable())  # any website picked it: no terminal escapes
     typed = input(f'Type "{site}" to permanently delete this passkey. This cannot be undone.\n> ')
     if typed.strip().casefold() != site.casefold():
         print("Nothing deleted.")
@@ -387,7 +387,7 @@ def main(argv=None):
     try:
         return args.func(args)
     except (CliError, ServiceError, transfer.TransferError) as e:
-        print(f"localpasskey: {e}", file=sys.stderr)
+        print("localpasskey:", "".join(ch if ch.isprintable() else " " for ch in str(e)), file=sys.stderr)
         return 1
     except (KeyboardInterrupt, EOFError):
         print()
