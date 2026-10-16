@@ -41,7 +41,7 @@ product_id = 42
             ("daemon", "log_level", ("verbose",)),
             ("device", "vendor_id", ("-1", "65536", "0x100000000")),
             ("device", "product_id", ("-1", "65536")),
-            ("device", "name", ("", "   ")),
+            ("device", "name", ("", "   ", "A" * 128, "\u00e9" * 64)),
         ):
             for value in values:
                 with self.subTest(key=key, value=value), self.assertRaises((ValueError, configparser.Error)):

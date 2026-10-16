@@ -40,8 +40,8 @@ def load_config(path: str = DEFAULT_PATH) -> Config:
         raise ValueError("prompt_timeout must be between 5 and 600 seconds")
     if config.log_level not in ("debug", "info", "warning", "error"):
         raise ValueError(f"unknown log_level {config.log_level!r}")
-    if not config.device_name:
-        raise ValueError("device name must not be empty")
+    if not 0 < len(config.device_name.encode()) <= 127:
+        raise ValueError("device name must be 1 to 127 bytes long")
     if not 0 <= config.vendor_id <= 0xffff or not 0 <= config.product_id <= 0xffff:
         raise ValueError("vendor_id and product_id must be between 0 and 65535")
     return config
