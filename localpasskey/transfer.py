@@ -71,7 +71,7 @@ def passphrase_problem(passphrase: str, repeat: Optional[str] = None) -> Optiona
     ``repeat`` is only compared once something is typed into it."""
     if not passphrase:
         return "Enter a passphrase to encrypt your export."
-    if len(passphrase) < MIN_PASSPHRASE_LENGTH:
+    if len(unicodedata.normalize("NFC", passphrase)) < MIN_PASSPHRASE_LENGTH:  # count what the key sees
         return f"At least {MIN_PASSPHRASE_LENGTH} characters"
     if repeat and repeat != passphrase:
         return "The passphrases do not match"
