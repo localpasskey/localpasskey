@@ -15,10 +15,11 @@ RuntimeDirectoryMode=0755
 UMask=0077
 
 # Needs /dev/uhid, /proc (to find the requesting process), the system bus, and
-# CAP_SETUID/CAP_SETGID to send desktop notifications as the user.
+# CAP_SETUID/CAP_SETGID to send desktop notifications as the user, and CAP_KILL
+# to stop a stuck notification helper.
 DevicePolicy=closed
 DeviceAllow=/dev/uhid rw
-CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID CAP_KILL
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
