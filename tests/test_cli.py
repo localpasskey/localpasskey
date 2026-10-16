@@ -409,6 +409,19 @@ class CliTransferTests(unittest.TestCase):
         self.assertIn("Imported 3 passkeys.", out)
         self.assertEqual(sorted(c.id for c in self.live()), sorted(ids))
 
+    def test_export_sends_exactly_the_ids_it_showed(self):
+        # A passkey added for the site after the preview must not slip into the file.
+        site = self.live()[0].rp_id
+        shown = sorted(c.id.hex() for c in self.live() if c.rp_id == site)
+        path = os.path.join(self.tmp, "site.lpkbackup")
+        with patch("localpasskey.cli._ask", wraps=cli._ask) as ask:
+            code, _, err, _ = self.run_cli("export", path, "--site", site, passphrases=[self.PASSPHRASE] * 2)
+        self.assertEqual(code, 0, err)
+        [(payload, _), _] = ask.call_args
+        self.assertEqual(payload["command"], "export")
+        self.assertNotIn("site", payload)
+        self.assertEqual(sorted(payload["ids"]), shown)
+
     def test_export_refuses_before_asking_the_daemon(self):
         path = os.path.join(self.tmp, "keys.lpkbackup")
         open(path, "w").close()
