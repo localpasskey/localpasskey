@@ -16,6 +16,7 @@ from localpasskey.control import record
 from localpasskey.ctap2 import Verdict
 from localpasskey.store import MAX_CREDENTIALS_PER_USER
 from tests import test_control
+from tests.test_transfer import fast_kdf
 
 
 class CliTests(unittest.TestCase):
@@ -345,6 +346,7 @@ class CliProcessTests(unittest.TestCase):
         self.assertIn("only root", result.stderr)
 
 
+@fast_kdf
 class CliTransferTests(unittest.TestCase):
     """export and import end to end against the test control server, in this
     process so that the passphrase prompts can be answered."""
