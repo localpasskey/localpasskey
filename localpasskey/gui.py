@@ -451,8 +451,6 @@ class PinDialog(QDialog):
 
     def show_state(self, is_set, retries):
         self.busy = False
-        self.set = is_set
-        self.retries = retries
         self.status.setText(pin_summary({"set": is_set, "retries": retries}))
         self.set_button.setText("Change PIN" if is_set else "Set PIN")
         for widget in (self.pin, self.repeat):
