@@ -76,6 +76,18 @@ class RawTransportTests(unittest.TestCase):
         self.transport.handle_report(struct.pack(">IB", self.cid, 1).ljust(64, b"\0"))
         self.assertEqual(self.read()[4:8], bytes([0xBF, 0, 1, ctaphid.ERR_INVALID_SEQ]))
 
+    def test_continuation_from_another_channel_is_ignored(self):
+        other = self.h.open_device()._channel_id
+        while not self.reports.empty():
+            self.reports.get()
+        payload = os.urandom(100)
+        self.transport.handle_report(init_packet(self.cid, ctaphid.CMD_PING, payload[:57], length=100))
+        self.transport.handle_report(struct.pack(">IB", other, 0).ljust(64, b"X"))
+        self.transport.handle_report((struct.pack(">IB", self.cid, 0) + payload[57:]).ljust(64, b"\0"))
+        reply = self.read() + self.read()
+        self.assertEqual(reply[:7], struct.pack(">IBH", self.cid, 0x80 | ctaphid.CMD_PING, 100))
+        self.assertEqual(reply[7:64] + reply[69:112], payload)
+
     def test_incomplete_message_times_out(self):
         self.transport.handle_report(init_packet(self.cid, ctaphid.CMD_PING, b"x" * 57, length=100))
         reply = self.read(timeout=ctaphid.MESSAGE_TIMEOUT + 2)
