@@ -6,6 +6,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from localpasskey import cose
@@ -62,6 +63,28 @@ class StoreTests(unittest.TestCase):
         [loaded] = reopened.credentials(1000, "alice")
         self.assertEqual(loaded, cred)
         cose.private_key_from_bytes(reopened.unseal(1000, loaded))
+
+    def test_a_master_key_of_the_wrong_size_is_refused(self):
+        for size in (16, 24, 31):
+            Path(self.dir, "master.key").write_bytes(os.urandom(size))
+            with self.subTest(size=size), self.assertRaises(StoreError):
+                CredentialStore(self.dir)
+
+    def test_losing_the_creation_race_uses_the_winners_key(self):
+        with tempfile.TemporaryDirectory() as d:
+            winner, real = os.urandom(32), Path.read_bytes
+
+            def racing(path):
+                if path.name == "master.key" and not path.exists():
+                    path.write_bytes(winner)  # the other daemon wins here
+                    raise FileNotFoundError
+                return real(path)
+
+            with patch.object(Path, "read_bytes", racing):
+                store = CredentialStore(d)
+            blob = store.seal(1000, b"id", b"secret")
+            reopened = CredentialStore(d)
+            self.assertEqual(reopened.unseal(1000, SimpleNamespace(id=b"id", sealed_key=blob)), b"secret")
 
     def test_sealed_keys_are_bound_to_their_owner(self):
         cred = self.credential(1000)
