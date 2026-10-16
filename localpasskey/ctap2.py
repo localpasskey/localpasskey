@@ -562,8 +562,9 @@ class Authenticator:
             return self._touch_request(rp_id, request, ctx)
 
         requester = self._requester()
-        # A real registration answers its own prompt, so it uses up any touch
-        # approval; a pinUvAuthParam only proves the PIN and approves nothing.
+        # A touch approval names no site or account, so it never approves
+        # saving, but a registration still uses it up; a pinUvAuthParam only
+        # proves the PIN and approves nothing.
         preverified = ctx.channel.take_preverification(requester)
         site, account, app = _label(rp_id), _account(user_name, display_name), self._app(requester)
         stored = self.store.credentials(requester.uid, requester.username)
@@ -587,14 +588,13 @@ class Authenticator:
             )
             raise CtapError(CTAP2_ERR_CREDENTIAL_EXCLUDED)
 
-        if not preverified:
-            self._require_approval(
-                requester,
-                f"{app} wants to save a passkey for “{account}” on {site}.",
-                ctx,
-                request,
-                f"save a passkey on {site}",
-            )
+        self._require_approval(
+            requester,
+            f"{app} wants to save a passkey for “{account}” on {site}.",
+            ctx,
+            request,
+            f"save a passkey on {site}",
+        )
 
         private_key = cose.generate_private_key(alg)
         cred_id = secrets.token_bytes(CREDENTIAL_ID_LENGTH)

@@ -582,7 +582,10 @@ class ProtocolTests(unittest.TestCase):
 
     def test_registration_uses_up_a_touch_approval(self):
         self.make(rp_id="make.me.blink")
+        prompts = len(self.h.verifier.messages)
         self.make(rp_id="other.example")
+        self.assertEqual(len(self.h.verifier.messages), prompts + 1)
+        self.assertIn("wants to save a passkey for", self.h.verifier.messages[-1])
         prompts = len(self.h.verifier.messages)
         self.ctap.get_assertion("other.example", os.urandom(32))
         self.assertEqual(len(self.h.verifier.messages), prompts + 1, "the sign-in asks for itself")
