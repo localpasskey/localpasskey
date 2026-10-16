@@ -43,6 +43,7 @@ MAX_REQUEST = 16 * 1024 * 1024  # An import of 4096 RSA passkeys fits in one req
 MIN_ID_PREFIX = 4
 MAX_RP_ID_LENGTH = 253  # the longest DNS name
 READERS_PER_UID = 2  # each reader may hold MAX_REQUEST bytes and their parsed JSON
+CONNECTIONS_PER_UID = 8  # open connections per caller, so one uid cannot exhaust our fds
 MAX_RSA_BITS = 4096  # loading a bigger key costs seconds of CPU with the GIL held
 _B64URL = re.compile(r"[A-Za-z0-9_-]*={0,2}")
 
@@ -171,7 +172,8 @@ class ControlServer:
     def _slot(self, uid):
         # setdefault is atomic, so concurrent connections of one uid share one slot.
         return self._slots.setdefault(uid, SimpleNamespace(
-            readers=threading.BoundedSemaphore(READERS_PER_UID), importing=threading.Lock()))
+            readers=threading.BoundedSemaphore(READERS_PER_UID),
+            connections=threading.BoundedSemaphore(CONNECTIONS_PER_UID), importing=threading.Lock()))
 
     def start(self):
         try:
@@ -213,28 +215,35 @@ class ControlServer:
         with conn:
             try:
                 pid, uid, _ = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-                conn.settimeout(10)
-                with self._slot(uid).readers:
-                    with conn.makefile("rb") as stream:
-                        data = stream.readline(MAX_REQUEST + 1)
-                    if len(data) > MAX_REQUEST or not data.endswith(b"\n"):
-                        return
-                    try:
-                        request, error = json.loads(data), None
-                    except ValueError as e:
-                        request, error = None, {"ok": False, "error": f"bad request: {e}"}
-                    del data
-                conn.settimeout(None)
+                conn.settimeout(10)  # also bounds the reply: a caller that stops reading is dropped
+                slot = self._slot(uid)
+                if not slot.connections.acquire(blocking=False):
+                    conn.sendall(b'{"ok": false, "error": "too many requests in progress"}\n')
+                    return
                 try:
-                    response = error or self.handle(request, pid, uid)
-                except (ControlError, StoreError) as e:
-                    response = {"ok": False, "error": str(e)}
-                except (ValueError, TypeError, AttributeError) as e:
-                    response = {"ok": False, "error": f"bad request: {e}"}
-                except Exception as e:
-                    log.exception("Control request failed")
-                    response = {"ok": False, "error": f"internal error: {e}"}
-                conn.sendall(json.dumps(response).encode() + b"\n")
+                    # Held until the reply is sent: the parsed request lives through the dialog.
+                    with slot.readers:
+                        with conn.makefile("rb") as stream:
+                            data = stream.readline(MAX_REQUEST + 1)
+                        if len(data) > MAX_REQUEST or not data.endswith(b"\n"):
+                            return
+                        try:
+                            request, error = json.loads(data), None
+                        except ValueError as e:
+                            request, error = None, {"ok": False, "error": f"bad request: {e}"}
+                        del data
+                        try:
+                            response = error or self.handle(request, pid, uid)
+                        except (ControlError, StoreError) as e:
+                            response = {"ok": False, "error": str(e)}
+                        except (ValueError, TypeError, AttributeError) as e:
+                            response = {"ok": False, "error": f"bad request: {e}"}
+                        except Exception as e:
+                            log.exception("Control request failed")
+                            response = {"ok": False, "error": f"internal error: {e}"}
+                        conn.sendall(json.dumps(response).encode() + b"\n")
+                finally:
+                    slot.connections.release()
             except OSError as e:
                 log.debug("Control connection failed: %s", e)
 

@@ -633,6 +633,51 @@ class ControlTests(unittest.TestCase):
                 self.assertEqual(json.loads(stream.readline()), {"ok": True, "version": "test"})
         readers.release()
 
+    def test_a_caller_has_a_bounded_number_of_open_connections(self):
+        self.server.start()
+        connections = self.server._slot(os.getuid()).connections
+        for _ in range(8):
+            connections.acquire()
+        try:
+            with self.assertRaisesRegex(client.ServiceError, "too many requests"):
+                client.request({"command": "status"}, self.server.path)
+            connections.release()
+            self.assertEqual(client.request({"command": "status"}, self.server.path), {"ok": True, "version": "test"})
+        finally:
+            for _ in range(7):
+                connections.release()
+
+    def test_a_request_waiting_for_authentication_keeps_its_reader_slot(self):
+        self.server.start()
+        asking, answer = threading.Event(), threading.Event()
+
+        def slow_dialog(subject, action_id, message, cancelled=None, timeout=120.0):
+            asking.set()
+            answer.wait(5)
+            return Verdict.APPROVED
+
+        self.polkit.check = slow_dialog
+        readers = self.server._slot(os.getuid()).readers
+        readers.acquire()
+        export = threading.Thread(target=client.request, args=({"command": "export", "all": True}, self.server.path))
+        export.start()
+        try:
+            self.assertTrue(asking.wait(5))
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.3)
+                sock.connect(self.server.path)
+                sock.sendall(b'{"command": "status"}\n')
+                with self.assertRaises(socket.timeout):
+                    sock.recv(1)
+                answer.set()
+                sock.settimeout(5)
+                with sock.makefile("rb") as stream:
+                    self.assertEqual(json.loads(stream.readline()), {"ok": True, "version": "test"})
+        finally:
+            answer.set()
+            readers.release()
+            export.join(5)
+
     def test_client_round_trip_and_errors(self):
         self.server.start()
         reply = client.request({"command": "list"}, self.server.path)
