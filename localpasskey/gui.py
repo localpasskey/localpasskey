@@ -341,7 +341,6 @@ class Details(QFrame):
         self.delete_button.setVisible(not trashed)
         self.restore_button.setVisible(trashed)
         self.purge_button.setVisible(trashed)
-        self.set_busy(False)
 
     def set_busy(self, busy, moving=True):
         self.delete_button.setEnabled(not busy)
@@ -602,6 +601,7 @@ class Window(QMainWindow):
         self._selected_id = None
         self._refreshing = False
         self._busy = False
+        self._moving = True  # what set_busy says while busy: "Moving…" unless an import or export runs
         self._trash = False
 
         self.model = QStandardItemModel(0, len(COLUMNS))
@@ -860,7 +860,7 @@ class Window(QMainWindow):
         if cred is not None:
             self._selected_id = cred["id"]
             self.details.show_cred(cred)
-            self.details.set_busy(self._busy)
+            self.details.set_busy(self._busy, self._moving)
             self.side.setCurrentWidget(self.details)
             return
         self._selected_id = None
@@ -997,25 +997,13 @@ class Window(QMainWindow):
 
     def _send(self, payload, note, done, forget_id=None):
         """Run one delete/restore/purge request, with the same busy handling for all three."""
-        if self._busy:
+        if not self._start(note, moving=True):
             return
-        self._busy = True
-        self.statusBar().showMessage(note)
-        self._resync()
-        if self.side.currentWidget() is self.details:
-            self.details.set_busy(True)
 
         def finished(result, error):
-            self._busy = False
-            self.details.set_busy(False)
-            self._resync()
-            if error is not None:
-                self._error(error)
-            else:
-                self.statusBar().showMessage(done, 4000)
-                if forget_id is not None and self._selected_id == forget_id:
-                    self._selected_id = None
-            self.refresh()
+            if error is None and forget_id is not None and self._selected_id == forget_id:
+                self._selected_id = None
+            self._finish(error, done)
 
         self.tasks.run(lambda: request(payload), finished)
 
@@ -1023,19 +1011,21 @@ class Window(QMainWindow):
         message = str(error)
         self.statusBar().showMessage(message[:1].upper() + message[1:], 6000)
 
-    def _start(self, note):
-        """Mark the window busy for an import or export; False if it already is."""
+    def _start(self, note, moving=False):
+        """Mark the window busy for a request; False if it already is."""
         if self._busy:
             return False
         self._busy = True
+        self._moving = moving
         self.statusBar().showMessage(note)
         self._resync()
         if self.side.currentWidget() is self.details:
-            self.details.set_busy(True, moving=False)
+            self.details.set_busy(True, moving)
         return True
 
     def _finish(self, error=None, done=None):
         self._busy = False
+        self._moving = True
         self.details.set_busy(False)
         self._resync()
         if error is not None:
