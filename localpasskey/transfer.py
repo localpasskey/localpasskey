@@ -108,8 +108,9 @@ def _binary(value, name) -> bytes:
 
 
 def _label(value) -> str:
-    # Names are cosmetic: shorten them rather than lose the passkey.
-    return value[:MAX_LABEL_LENGTH] if isinstance(value, str) else ""
+    # Names are cosmetic: shorten them rather than lose the passkey. A lone
+    # surrogate from a JSON escape would make every CBOR reply naming it fail.
+    return value[:MAX_LABEL_LENGTH].encode("utf-8", "replace").decode() if isinstance(value, str) else ""
 
 
 def _alg_of(key) -> int:

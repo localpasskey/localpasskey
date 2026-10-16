@@ -267,6 +267,11 @@ class BitwardenTests(unittest.TestCase):
         ])
         self.assertEqual(loaded[0]["created"], 0.0)
 
+    def test_lone_surrogate_in_a_name_replaced(self):
+        record = make_record()
+        loaded = transfer.load(bitwarden_export(bitwarden_credential(record, userName="bob\ud800")), self.fail)
+        self.assertEqual(loaded[0]["user_name"], "bob?")
+
     def test_encrypted_exports_refused(self):
         protected = json.dumps({
             "encrypted": True, "passwordProtected": True, "salt": "AAAA", "kdfType": 0,
