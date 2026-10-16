@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from . import cose
 from .store import CredentialStore, PinState
 
 PIN_INVALID = 0x31
@@ -84,14 +85,8 @@ def _hkdf(secret: bytes, info: bytes) -> bytes:
 
 
 def _cose_key(key) -> dict:
-    numbers = key.public_key().public_numbers()
-    return {
-        1: 2,  # kty: EC2
-        3: -25,  # per the spec, "although this is NOT the algorithm actually used"
-        -1: 1,  # crv: P-256
-        -2: numbers.x.to_bytes(_P256_KEY_SIZE, "big"),
-        -3: numbers.y.to_bytes(_P256_KEY_SIZE, "big"),
-    }
+    # alg -25 per the spec, "although this is NOT the algorithm actually used"
+    return {**cose.public_key(key, cose.ES256), 3: -25}
 
 
 def _peer_key(peer_cose_key) -> ec.EllipticCurvePublicKey:
@@ -187,12 +182,6 @@ class PinManager:
     def shared_secret(self, protocol: int, peer_cose_key) -> bytes:
         with self._lock:
             return _shared_secret(self._key, protocol, peer_cose_key)
-
-    def encrypt(self, protocol: int, key: bytes, plaintext: bytes) -> bytes:
-        return encrypt(protocol, key, plaintext)
-
-    def decrypt(self, protocol: int, key: bytes, ciphertext: bytes) -> bytes:
-        return decrypt(protocol, key, ciphertext)
 
     def is_set(self, uid: int, username: str) -> bool:
         return self.state(uid, username) is not None

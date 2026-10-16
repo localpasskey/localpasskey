@@ -71,18 +71,18 @@ class CryptoTestCase(unittest.TestCase):
                 peer_key, secret = protocol.encapsulate(self.manager.key_agreement())
                 ours = self.manager.shared_secret(version, peer_key)
                 plaintext = b"passkey data" * 4
-                self.assertEqual(protocol.decrypt(ours, self.manager.encrypt(version, ours, plaintext)), plaintext)
-                self.assertEqual(self.manager.decrypt(version, ours, protocol.encrypt(ours, plaintext)), plaintext)
+                self.assertEqual(protocol.decrypt(ours, clientpin.encrypt(version, ours, plaintext)), plaintext)
+                self.assertEqual(clientpin.decrypt(version, ours, protocol.encrypt(ours, plaintext)), plaintext)
                 # A client's own key agrees with us too, not just ours with itself.
                 self.assertEqual(self.manager.shared_secret(version, peer_key), secret)
 
     def test_protocol_2_prefixes_a_random_iv_and_protocol_1_does_not(self):
         self.assertNotEqual(
-            self.manager.encrypt(2, bytes(64), bytes(16))[:16],
-            self.manager.encrypt(2, bytes(64), bytes(16))[:16],
+            clientpin.encrypt(2, bytes(64), bytes(16))[:16],
+            clientpin.encrypt(2, bytes(64), bytes(16))[:16],
         )
-        self.assertEqual(len(self.manager.encrypt(2, bytes(64), bytes(32))), 48)
-        self.assertEqual(len(self.manager.encrypt(1, bytes(32), bytes(32))), 32)
+        self.assertEqual(len(clientpin.encrypt(2, bytes(64), bytes(32))), 48)
+        self.assertEqual(len(clientpin.encrypt(1, bytes(32), bytes(32))), 32)
 
     def test_authenticate_matches_python_fido2(self):
         for version, protocol in self.protocols():
@@ -120,9 +120,9 @@ class CryptoTestCase(unittest.TestCase):
 
     def test_decrypt_rejects_short_or_ragged_ciphertext(self):
         with self.assertRaises(ValueError):
-            self.manager.decrypt(2, bytes(64), bytes(16))
+            clientpin.decrypt(2, bytes(64), bytes(16))
         with self.assertRaises(ValueError):
-            self.manager.decrypt(1, bytes(32), bytes(15))
+            clientpin.decrypt(1, bytes(32), bytes(15))
 
 
 class PinManagerTestCase(unittest.TestCase):
