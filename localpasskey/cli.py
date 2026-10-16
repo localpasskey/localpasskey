@@ -139,7 +139,7 @@ def _apply(args, command, key, verb, prompt, done=None):
         print(f"Nothing {command}d.")
         return 1
     count = len(_ask(selector, args)[key])
-    print(f"{verb} {count} passkey{'s' if count != 1 else ''}{done or ''}.")
+    print(f"{verb} {_plural(count)}{done or ''}.")
     return 0
 
 
@@ -153,8 +153,6 @@ def cmd_restore(args):
 
 
 def cmd_purge(args):
-    if len(args.ids) != 1:
-        raise CliError("purge permanently deletes one passkey at a time")
     selector = _with_user({"command": "purge", "ids": args.ids}, args)
     [doomed] = request({**selector, "dry_run": True}, args.socket)["deleted"]
     _print_credentials([doomed], deleted=True)
