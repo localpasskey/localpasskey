@@ -12,21 +12,33 @@ from localpasskey.session import RequesterResolver, application_name, process_ui
 
 class SessionTests(unittest.TestCase):
     def test_real_process_open_file_and_identity(self):
-        with tempfile.NamedTemporaryFile() as target:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import sys; f=open('/dev/null'); print('ready', flush=True); sys.stdin.read(1)"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(proc.stdout.readline(), "ready\n")
+            self.assertIn(proc.pid, processes_with_open("/dev/null"))
+            self.assertEqual(process_uid(proc.pid), os.getuid())
+            self.assertIsNotNone(application_name(proc.pid))
+        finally:
+            proc.communicate("x", timeout=5)
+        self.assertNotIn(proc.pid, processes_with_open("/dev/null"))
+        self.assertIsNone(process_uid(proc.pid))
+        self.assertIsNone(application_name(proc.pid))
+
+    def test_regular_file_at_the_device_path_is_not_an_opener(self):
+        # A mount namespace can put a plain file where the device node should be.
+        with tempfile.NamedTemporaryFile() as fake:
             proc = subprocess.Popen(
-                [sys.executable, "-c", "import sys; f=open(sys.argv[1]); print('ready', flush=True); sys.stdin.read(1)", target.name],
+                [sys.executable, "-c", "import sys; f=open(sys.argv[1]); print('ready', flush=True); sys.stdin.read(1)", fake.name],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
             )
             try:
                 self.assertEqual(proc.stdout.readline(), "ready\n")
-                self.assertIn(proc.pid, processes_with_open(target.name))
-                self.assertEqual(process_uid(proc.pid), os.getuid())
-                self.assertIsNotNone(application_name(proc.pid))
+                self.assertNotIn(proc.pid, processes_with_open(fake.name))
             finally:
                 proc.communicate("x", timeout=5)
-            self.assertNotIn(proc.pid, processes_with_open(target.name))
-            self.assertIsNone(process_uid(proc.pid))
-            self.assertIsNone(application_name(proc.pid))
 
     def resolve(self, owners, active=1000, app="Firefox"):
         logind = Mock()
@@ -80,15 +92,15 @@ class SessionTests(unittest.TestCase):
             finally:
                 closed.append(path)
 
-        def readlink(path):
+        def fake_stat(path):
             if path.endswith("/gone"):
                 raise FileNotFoundError(path)
-            return "/dev/hidraw42"
+            return os.stat_result((0o20600, 7, 5, 1, 0, 0, 0, 0, 0, 0), {"st_rdev": 0x1234})  # a char device
 
         with (
             patch("localpasskey.session.os.getpid", return_value=10),
             patch("localpasskey.session.os.scandir", side_effect=scan),
-            patch("localpasskey.session.os.readlink", side_effect=readlink),
+            patch("localpasskey.session.os.stat", side_effect=fake_stat),
         ):
             self.assertEqual(processes_with_open("/dev/hidraw42"), [12])
         self.assertEqual(closed, ["/proc/12/fd", "/proc/13/fd", "/proc"])

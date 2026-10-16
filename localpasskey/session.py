@@ -12,6 +12,7 @@ import logging
 import os
 import pwd
 import re
+import stat
 from typing import Callable, List, Optional
 
 from gi.repository import Gio, GLib
@@ -52,6 +53,11 @@ _PYTHON = re.compile(r"python3(\.\d+)?")
 
 def processes_with_open(path: str) -> List[int]:
     """PIDs of the processes that currently have ``path`` open."""
+    # Match the device, not the link text: a mount namespace can fake that.
+    try:
+        target = os.stat(path)
+    except OSError:
+        return []
     pids = []
     me = os.getpid()
     with os.scandir("/proc") as processes:
@@ -62,7 +68,8 @@ def processes_with_open(path: str) -> List[int]:
                 with os.scandir(f"/proc/{entry.name}/fd") as fds:
                     for fd in fds:
                         try:
-                            if os.readlink(fd.path) == path:
+                            s = os.stat(fd.path)
+                            if stat.S_ISCHR(s.st_mode) and s.st_rdev == target.st_rdev:
                                 pids.append(int(entry.name))
                                 break
                         except OSError:
