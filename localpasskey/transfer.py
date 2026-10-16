@@ -87,10 +87,10 @@ def describe(record: dict) -> dict:
     alg = record.get("alg")
     return {
         "id": cred_id,
-        "site": record.get("rp_id", ""),
-        "site_name": record.get("rp_name", ""),
-        "user_name": record.get("user_name", ""),
-        "display_name": record.get("user_display_name", ""),
+        "site": _label(record.get("rp_id")),
+        "site_name": _label(record.get("rp_name")),
+        "user_name": _label(record.get("user_name")),
+        "display_name": _label(record.get("user_display_name")),
         "algorithm": cose.ALGORITHM_NAMES.get(alg, str(alg)) if isinstance(alg, int) else str(alg),
         "discoverable": record.get("discoverable", True),
         "created": record.get("created"),

@@ -277,6 +277,7 @@ class BitwardenTests(unittest.TestCase):
             bitwarden_credential(record, credentialId="not-a-guid"),
             bitwarden_credential(record, keyValue="!!"),
             bitwarden_credential(record, rpId=""),
+            bitwarden_credential(record, rpId="x" * 10000, userName=["bob"]),
             bitwarden_credential(record, creationDate="yesterday"),
             bitwarden_credential(record, creationDate=5),
         )
@@ -285,7 +286,10 @@ class BitwardenTests(unittest.TestCase):
             "the credential ID is neither a UUID nor b64.-prefixed",
             "the private key is not base64url",
             "invalid site",
+            "invalid site",
         ])
+        self.assertEqual(len(loaded.skipped[3]["credential"]["site"]), 255)
+        self.assertEqual(loaded.skipped[3]["credential"]["user_name"], "")
         self.assertEqual([r["created"] for r in loaded], [0.0, 0.0])
 
     def test_lone_surrogate_in_a_name_replaced(self):
