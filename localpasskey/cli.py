@@ -65,7 +65,7 @@ def _print_credentials(creds, deleted=False):
 
 
 def _with_user(payload, args):
-    if args.user:
+    if args.user is not None:  # an empty --user must fail, not fall back to the caller
         payload["user"] = args.user
     return payload
 

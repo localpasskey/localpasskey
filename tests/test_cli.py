@@ -117,6 +117,8 @@ class CliTests(unittest.TestCase):
             ):
                 cli.main([command, *extra, "--user", "alice"])
                 self.assertEqual(request.call_args.args[0]["user"], "alice")
+                cli.main([command, *extra, "--user", ""])
+                self.assertEqual(request.call_args.args[0]["user"], "", "an empty --user is not the caller")
 
     def test_purge_takes_exactly_one_id(self):
         with patch("localpasskey.cli.request") as request:
