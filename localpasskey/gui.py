@@ -72,7 +72,9 @@ def account_label(cred: dict) -> str:
 
 
 def is_website(site: str) -> bool:
-    return "." in site and not any(ch in site for ch in ":/ ")
+    url = QUrl()
+    url.setHost(site, QUrl.ParsingMode.StrictMode)  # strict: '@', '#', '?' or '\\' would make the URL open another host
+    return "." in site and bool(url.host())
 
 
 def matches(cred: dict, query: str) -> bool:

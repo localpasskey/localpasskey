@@ -51,6 +51,10 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(gui.is_website("github.com"))
         self.assertFalse(gui.is_website("localhost"))
         self.assertFalse(gui.is_website("ssh:"))
+        self.assertTrue(gui.is_website("bücher.example"))
+        for site in ("accounts.google.com@evil.example", "evil.example#.github.com", "evil.example?github.com",
+                     "github.com\\@evil.example", "a b.com", "host:80"):
+            self.assertFalse(gui.is_website(site), site)
 
     def test_list_is_sorted_by_brand_then_account(self):
         creds = [
