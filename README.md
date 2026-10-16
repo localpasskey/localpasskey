@@ -36,7 +36,7 @@ is needed.
   computer."* You confirm with your own password, or with a fingerprint if PAM
   is set up for fprintd.
 * Passkeys are **per Linux user**. The daemon works out who is asking from the
-  process that opened the device. Each user can have any number of passkeys,
+  process that opened the device. Each user can have up to 4096 passkeys (the trash included),
   including several accounts on the same site; for user-name-less sign-ins the
   browser shows an account chooser.
 * Keys are ES256 (P-256), EdDSA (Ed25519) or RS256, whichever the site prefers.
