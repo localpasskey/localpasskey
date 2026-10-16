@@ -323,8 +323,8 @@ class ControlServer:
         count = len(chosen)
         self._approve(
             pid, uid,
-            f"Export {count} passkey{'s' if count != 1 else ''} stored on this computer? Whoever gets "
-            "the exported file and its passphrase can sign in as you.",
+            f"Export {count} passkey{'s' if count != 1 else ''} stored on this computer? Whoever can "
+            "open the exported file can sign in as you.",
             "not exported", ACTION_EXPORT,
         )
         # Another request may have changed things during the dialog.

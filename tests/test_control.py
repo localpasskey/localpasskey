@@ -327,8 +327,8 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.polkit.checks[-1][:2], ("unix-process", ACTION_EXPORT))
         self.assertEqual(
             self.polkit.checks[-1][2],
-            "Export 1 passkey stored on this computer? Whoever gets the exported file and its "
-            "passphrase can sign in as you.",
+            "Export 1 passkey stored on this computer? Whoever can open the exported file can "
+            "sign in as you.",
         )
         [record_] = reply["credentials"]
         self.assertEqual(record_["id"], b64encode(self.creds[0].id))
