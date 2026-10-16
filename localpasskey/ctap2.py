@@ -101,6 +101,7 @@ SUB_UPDATE_USER_INFORMATION = 0x07
 MAX_CREDENTIALS_IN_LIST = 8
 MAX_CREDENTIAL_ID_LENGTH = 512
 MAX_LABEL_LENGTH = 255
+MAX_RP_ID_LENGTH = 253  # the longest DNS name
 
 # Chrome and libfido2 use ".dummy", Firefox uses "make.me.blink" for the fake
 # registration that stands in for "touch the security key you want to use".
@@ -231,6 +232,12 @@ def _param(container, key, kind, default=...):
     if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
         raise CtapError(CTAP2_ERR_CBOR_UNEXPECTED_TYPE, f"bad type for {key!r}")
     return value
+
+
+def valid_rp_id(rp_id) -> bool:
+    """The RP IDs this authenticator stores, and so the ones import accepts."""
+    return (isinstance(rp_id, str) and 0 < len(rp_id) <= MAX_RP_ID_LENGTH
+            and not any(ch.isspace() or not ch.isprintable() for ch in rp_id))
 
 
 def _optional_label(container, key):
@@ -540,6 +547,8 @@ class Authenticator:
         options = _param(params, 0x07, dict, {})
 
         rp_id = _param(rp, "id", str)
+        if not valid_rp_id(rp_id):
+            raise CtapError(CTAP1_ERR_INVALID_PARAMETER, "invalid rp id")
         rp_name = _param(rp, "name", str, "")
         user_id = _param(user, "id", bytes)
         user_name = _param(user, "name", str, "")

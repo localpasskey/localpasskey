@@ -415,6 +415,8 @@ class ProtocolTests(unittest.TestCase):
                 (f"assertion hash length {length}", 0x02,
                  {1: "example.com", 2: b"x" * length, 5: {"up": False}}, CtapError.ERR.INVALID_PARAMETER),
             ])
+        cases.extend((f"rp id {bad!r}", 0x01, {1: cdh, 2: {"id": bad}, 3: user, 4: es256},
+                      CtapError.ERR.INVALID_PARAMETER) for bad in ("", "a b", "a\tb", "a" * 254))
         for name, command, params, code in cases:
             with self.subTest(name):
                 self.assertEqual(self.raw(command, params), code)
