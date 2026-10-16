@@ -184,6 +184,12 @@ class WindowTransferTests(unittest.TestCase):
         self.assertEqual(len(records), 7)  # the trash is never exported
         self.assertIn("Exported 7 passkeys", self.window.statusBar().currentMessage())
 
+    def test_export_write_error_names_the_chosen_file(self):
+        hidden = os.path.join(self.tmp.name, ".keys.lpkbackup.1.tmp")
+        with patch.object(gui, "write_private_file", side_effect=PermissionError(13, "Permission denied", hidden)):
+            self.export()
+        self.assertEqual(self.window.statusBar().currentMessage(), f"Cannot write {self.path}: Permission denied")
+
     def test_export_of_the_selected_site_only(self):
         github = next(row for row in range(self.window.proxy.rowCount())
                       if self.window.proxy.index(row, 0).data(gui.CRED_ROLE)["site"] == "github.com")

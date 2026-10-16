@@ -1053,7 +1053,10 @@ class Window(QMainWindow):
 
         def work():
             records = request({"command": "export", **selector})["credentials"]
-            write_private_file(path, transfer.export_backup(records, passphrase), overwrite=True)
+            try:
+                write_private_file(path, transfer.export_backup(records, passphrase), overwrite=True)
+            except OSError as e:  # not str(e): that names the hidden temporary file
+                raise OSError(f"cannot write {path}: {e.strerror or e}") from None
             return len(records)
 
         self.tasks.run(work, lambda count, error: self._finish(
