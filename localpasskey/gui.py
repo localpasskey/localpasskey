@@ -630,11 +630,8 @@ class Window(QMainWindow):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.selectionModel().selectionChanged.connect(self._on_selection)
-        header = self.table.header()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setStretchLastSection(False)
+        self.table.header().setStretchLastSection(False)
+        self._size_columns()
 
         self.details = Details(self)
         self.message = Message()
@@ -808,7 +805,14 @@ class Window(QMainWindow):
         for cred in self._creds or []:
             self.model.appendRow(passkey_row(cred, trashed=self._trash))
         self.proxy.setSourceModel(self.model)
+        self._size_columns()  # reattaching the model reset the header's sections
         self._restore(selected)
+
+    def _size_columns(self):
+        header = self.table.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
 
     def _proxy_row_of(self, cred_id):
         for row in range(self.proxy.rowCount()):

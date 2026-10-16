@@ -146,6 +146,12 @@ class WindowTests(unittest.TestCase):
         self.window.table.sortByColumn(2, Qt.SortOrder.DescendingOrder)
         self.assertEqual(self.window.proxy.index(0, 0).data(gui.CRED_ROLE)["id"], selected)
 
+    def test_columns_keep_their_sizing_after_a_load(self):
+        header = self.window.table.header()
+        modes = [header.sectionResizeMode(i) for i in range(3)]
+        self.assertEqual(modes, [gui.QHeaderView.ResizeMode.Stretch, gui.QHeaderView.ResizeMode.Stretch,
+                                 gui.QHeaderView.ResizeMode.ResizeToContents])
+
     def test_a_refresh_asked_for_during_a_load_runs_after_it(self):
         read, gate, real = threading.Event(), threading.Event(), gui.request
 
