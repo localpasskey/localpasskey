@@ -39,7 +39,6 @@ class BackupTests(unittest.TestCase):
         loaded = self.roundtrip(records)
         self.assertEqual(loaded, records)
         self.assertEqual(loaded.skipped, [])
-        self.assertEqual(loaded.format, "localpasskey")
         self.assertEqual(transfer.detect_format(transfer.export_backup(records, PASSPHRASE)), "localpasskey")
 
     def test_keys_are_not_in_the_file_in_clear(self):
@@ -177,7 +176,7 @@ class CxfTests(unittest.TestCase):
         self.assertEqual(cred["type"], "passkey")
         self.assertEqual(cred["key"], records[0]["private_key"])
         loaded = transfer.load(data, self.fail)
-        self.assertEqual(loaded.format, "cxf")
+        self.assertEqual(transfer.detect_format(data), "cxf")
         self.assertEqual(loaded, records)
 
     def test_spec_example_with_other_items_and_skips(self):
@@ -264,7 +263,6 @@ class BitwardenTests(unittest.TestCase):
         )
         self.assertEqual(transfer.detect_format(data), "bitwarden")
         loaded = transfer.load(data, self.fail)
-        self.assertEqual(loaded.format, "bitwarden")
         self.assertEqual(loaded.skipped, [])
         self.assertEqual(loaded[0], dict(guid_record))
         self.assertEqual(loaded[1], dict(

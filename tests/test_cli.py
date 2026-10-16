@@ -442,8 +442,9 @@ class CliTransferTests(unittest.TestCase):
         self.assertIn("Exported 2 passkeys", out)
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
         with open(path, "rb") as stream:
-            records = transfer.load(stream.read(), lambda: self.fail("CXF has no passphrase"))
-        self.assertEqual(records.format, "cxf")
+            data = stream.read()
+        records = transfer.load(data, lambda: self.fail("CXF has no passphrase"))
+        self.assertEqual(transfer.detect_format(data), "cxf")
         self.assertEqual({r["rp_id"] for r in records}, {"example.com"})
 
     def test_import_reports_skips_and_cancel_imports_nothing(self):

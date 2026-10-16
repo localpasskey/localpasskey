@@ -55,10 +55,9 @@ class Records(list):
     """The normalized records of a file, plus the passkeys that were skipped
     while reading it (``{"credential": describe-like, "reason": str}``)."""
 
-    def __init__(self, records=(), skipped=(), format=""):
-        super().__init__(records)
-        self.skipped = list(skipped)
-        self.format = format
+    def __init__(self):
+        super().__init__()
+        self.skipped = []
 
 
 def passphrase_problem(passphrase: str, repeat: Optional[str] = None) -> Optional[str]:
@@ -146,9 +145,9 @@ def _record(*, cred_id: bytes, rp_id, user_id: bytes, private_key: bytes, rp_nam
     }
 
 
-def _collect(entries, convert, format, peek=None) -> Records:
+def _collect(entries, convert, peek=None) -> Records:
     """Convert every entry, keeping the ones that fail as skipped."""
-    result = Records(format=format)
+    result = Records()
     for entry in entries:
         try:
             result.append(convert(entry))
@@ -239,7 +238,7 @@ def _load_backup(doc: dict, passphrase_callback: Callable[[], str]) -> Records:
             raise TypeError
     except (ValueError, KeyError, TypeError, RecursionError):
         raise TransferError("This backup is damaged (bad contents)") from None
-    return _collect(creds, _from_backup, "localpasskey")
+    return _collect(creds, _from_backup)
 
 
 def _from_backup(data) -> dict:
@@ -434,5 +433,5 @@ def load(data: bytes, passphrase_callback: Callable[[], str]) -> Records:
     if kind == "localpasskey":
         return _load_backup(doc, passphrase_callback)
     if kind == "cxf":
-        return _collect(list(_cxf_passkeys(doc)), _from_cxf, kind, _peek_cxf)
-    return _collect(list(_bitwarden_passkeys(doc)), _from_bitwarden, kind, _peek_bitwarden)
+        return _collect(list(_cxf_passkeys(doc)), _from_cxf, _peek_cxf)
+    return _collect(list(_bitwarden_passkeys(doc)), _from_bitwarden, _peek_bitwarden)
