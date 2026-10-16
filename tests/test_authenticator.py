@@ -590,6 +590,19 @@ class ProtocolTests(unittest.TestCase):
         self.ctap.get_assertion("other.example", os.urandom(32))
         self.assertEqual(len(self.h.verifier.messages), prompts + 1, "the sign-in asks for itself")
 
+    def test_pin_probe_approval_covers_only_its_own_sign_in(self):
+        self.make()
+        self.make(rp_id="other.example")
+        self.h.pins.set(self.h.requester.uid, self.h.requester.username, b"1234")
+        for rp_id, client_data_hash, asks in (("example.com", None, 0), ("other.example", os.urandom(32), 1)):
+            with self.subTest(rp_id=rp_id):
+                probed = os.urandom(32)
+                probe = {1: "example.com", 2: probed, 6: b"", 7: 2}
+                self.assertEqual(self.raw(0x02, probe), CtapError.ERR.PIN_INVALID)
+                prompts = len(self.h.verifier.messages)
+                self.ctap.get_assertion(rp_id, client_data_hash or probed)
+                self.assertEqual(len(self.h.verifier.messages), prompts + asks)
+
     def test_failed_assertion_uses_up_a_touch_approval(self):
         self.make()
         self.h.authenticator.prompt_timeout = 0.3

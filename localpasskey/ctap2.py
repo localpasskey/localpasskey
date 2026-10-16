@@ -186,7 +186,7 @@ class ChannelState:
         self.no_credentials_at = 0.0
         self.preverified_until = 0.0
         self.preverified_requester: Optional[Requester] = None
-        self.preverified_touch = False
+        self.preverified_ceremony: Optional[tuple] = None
         self.declined: Optional[tuple] = None
 
     def just_declined(self, request) -> bool:
@@ -203,19 +203,23 @@ class ChannelState:
             and time.monotonic() - self.no_credentials_at < NO_CREDENTIALS_MEMORY
         )
 
-    def preverify_touch(self, requester):
+    def preverify_touch(self, requester, ceremony):
+        """``ceremony`` is the approved (RP ID, clientDataHash), None for any."""
         self.preverified_until = time.monotonic() + PREVERIFIED_WINDOW
         self.preverified_requester = requester
-        self.preverified_touch = True
+        self.preverified_ceremony = ceremony
 
-    def take_preverification(self, requester) -> bool:
-        """Whether a touch just approved ``requester``; used up either way."""
-        valid = requester == self.preverified_requester and time.monotonic() < self.preverified_until
-        touch = valid and self.preverified_touch
+    def take_preverification(self, requester, ceremony) -> bool:
+        """Whether a touch just approved ``requester`` for ``ceremony``; used up either way."""
+        valid = (
+            requester == self.preverified_requester
+            and self.preverified_ceremony in (None, ceremony)
+            and time.monotonic() < self.preverified_until
+        )
         self.preverified_until = 0.0
         self.preverified_requester = None
-        self.preverified_touch = False
-        return touch
+        self.preverified_ceremony = None
+        return valid
 
 
 def _param(container, key, kind, default=...):
@@ -565,7 +569,7 @@ class Authenticator:
         # A touch approval names no site or account, so it never approves
         # saving, but a registration still uses it up; a pinUvAuthParam only
         # proves the PIN and approves nothing.
-        preverified = ctx.channel.take_preverification(requester)
+        preverified = ctx.channel.take_preverification(requester, (rp_id, client_data_hash))
         site, account, app = _label(rp_id), _account(user_name, display_name), self._app(requester)
         stored = self.store.credentials(requester.uid, requester.username)
         if any(c.rp_id == rp_id and c.id in excluded_ids for c in stored):
@@ -671,7 +675,9 @@ class Authenticator:
             message = f"{self._app(requester)} wants to use a passkey stored on this computer."
         self._require_approval(requester, message, ctx, request, "use a passkey")
         # The real request follows on the same channel; don't ask twice.
-        state.preverify_touch(requester)
+        # shortcut: a dummy touch names no site, so its approval covers any
+        # ceremony for PREVERIFIED_WINDOW; bind it too if co-openers matter.
+        state.preverify_touch(requester, None if request[1] in DUMMY_RP_IDS else request[1:])
         return requester
 
     def _touch_request(self, rp_id, request, ctx):
@@ -1054,7 +1060,7 @@ class Authenticator:
         state = ctx.channel
         # The touch approval covers this request whether or not it finds a
         # passkey; a pinUvAuthParam only proves the PIN and approves nothing.
-        preverified = state.take_preverification(requester) if interactive else False
+        preverified = state.take_preverification(requester, (rp_id, client_data_hash)) if interactive else False
         if not candidates:
             log.debug("No passkey for %s (uid %d)", rp_id, requester.uid)
             if interactive:
