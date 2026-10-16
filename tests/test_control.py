@@ -10,11 +10,11 @@ import unittest
 
 from unittest.mock import patch
 
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from localpasskey import client, cose
 from localpasskey.clientpin import MAX_PIN_RETRIES
-from localpasskey.control import MAX_REQUEST, ControlError, ControlServer, record
+from localpasskey.control import MAX_REQUEST, ControlError, ControlServer, _parse_record, record
 from localpasskey.ctap2 import Verdict
 from localpasskey.polkit import ACTION_EXPORT, ACTION_MANAGE
 from localpasskey.store import Credential, CredentialStore, StoreError, b64encode
@@ -121,6 +121,13 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.polkit.checks[-1][:2], ("unix-process", ACTION_MANAGE))
         self.assertEqual(len(self.store.credentials(self.uid, self.name)), 2)
 
+    def test_every_unapproved_verdict_refuses(self):
+        for verdict in (Verdict.UNAVAILABLE, Verdict.TIMED_OUT, Verdict.CANCELLED):
+            self.polkit.verdict = verdict
+            with self.subTest(verdict=verdict), self.assertRaises(ControlError):
+                self.handle({"command": "delete", "all": True})
+            self.assertEqual(len(self.store.credentials(self.uid, self.name)), 3)
+
     def test_deletion_is_reported_to_the_owner(self):
         notifier = FakeNotifier()
         self.server.notifier = notifier
@@ -175,6 +182,32 @@ class ControlTests(unittest.TestCase):
         self.polkit.check = deleting_meanwhile(self.creds[2])
         self.assertEqual(self.handle({"command": "delete", "ids": [self.creds[2].id.hex()]})["deleted"], [])
         self.assertEqual(len(notifier.notes), 1, "nothing was deleted by this request")
+
+    def test_export_leaves_out_what_was_trashed_during_the_dialog(self):
+        def trashing_meanwhile(subject, action_id, message, cancelled=None, timeout=120.0):
+            self.store.remove(self.uid, self.name, [self.creds[0].id])  # e.g. from the GUI
+            return Verdict.APPROVED
+
+        self.polkit.check = trashing_meanwhile
+        reply = self.handle({"command": "export", "all": True})
+        self.assertNotIn(self.creds[0].id.hex(), [c["id"] for c in reply["exported"]])
+        self.assertEqual(len(reply["credentials"]), 2)
+
+    def test_import_applies_the_conflict_rules_again_after_the_dialog(self):
+        records = [self.normalized()]
+
+        def importing_meanwhile(subject, action_id, message, cancelled=None, timeout=120.0):
+            # e.g. the same file imported from a second window
+            self.store.import_credentials(self.uid, self.name, [_parse_record(0, records[0], self.store, self.uid)])
+            return Verdict.APPROVED
+
+        self.polkit.check = importing_meanwhile
+        reply = self.handle({"command": "import", "credentials": records})
+        self.assertEqual(reply["imported"], [])
+        self.assertEqual([s["reason"] for s in reply["skipped"]], ["already on this computer"])
+        ids = [c.id for c in self.store.credentials(self.uid, self.name)]
+        self.assertEqual(len(ids), 4)
+        self.assertEqual(len(set(ids)), 4)
 
     def test_notifier_failure_does_not_undo_deletion(self):
         self.server.notifier = FakeNotifier(fail=True)
@@ -431,6 +464,12 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(StoreError):
             self.store.unseal(self.uid + 1, cred)
 
+    def test_root_import_for_a_user_seals_for_that_user(self):
+        if self.uid == 0:
+            self.skipTest("running as root")
+        self.server.handle({"command": "import", "user": self.name, "credentials": [self.normalized()]}, os.getpid(), 0)
+        self.store.unseal(self.uid, self.store.credentials(self.uid, self.name)[-1])
+
     def test_import_validates_records_strictly(self):
         for overrides in [
             {"id": "not base64!!"},
@@ -476,6 +515,10 @@ class ControlTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "not a valid RS256 key"):
             self.handle({"command": "import", "credentials": [
                 self.normalized(alg=cose.RS256, private_key=b64encode(cose.private_key_to_bytes(small)))]})
+        p384 = ec.generate_private_key(ec.SECP384R1())
+        with self.assertRaisesRegex(ControlError, "not a valid ES256 key"):
+            self.handle({"command": "import", "dry_run": True, "credentials": [
+                self.normalized(private_key=b64encode(cose.private_key_to_bytes(p384)))]})
 
     def test_import_refuses_oversized_rsa_keys_and_too_many_records(self):
         big = rsa.generate_private_key(public_exponent=65537, key_size=4160)
