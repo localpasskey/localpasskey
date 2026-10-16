@@ -97,6 +97,10 @@ class WebAuthnFlowTests(FlowTestCase):
             "Test Browser wants to sign in to example.com as “alice” with a passkey stored on this computer.",
         )
 
+    def test_polkit_substitutions_in_site_text_are_escaped(self):
+        self.register(site("example.com"), b"x-id", "a$(user)b")
+        self.assertNotIn("$(", self.h.verifier.messages[-1])
+
     def test_several_accounts_and_sites(self):
         example, other = site("example.com"), site("other.example.org")
         alice = self.register(example, b"alice-id", "alice").credential_data
@@ -602,6 +606,25 @@ class ProtocolTests(unittest.TestCase):
                 prompts = len(self.h.verifier.messages)
                 self.ctap.get_assertion(rp_id, client_data_hash or probed)
                 self.assertEqual(len(self.h.verifier.messages), prompts + asks)
+
+    def test_touch_approval_expires(self):
+        self.make()
+        # Patch the constant, not time.monotonic: a frozen clock would also stall the harness.
+        with patch("localpasskey.ctap2.PREVERIFIED_WINDOW", -1.0):
+            self.make(rp_id="make.me.blink")
+        prompts = len(self.h.verifier.messages)
+        self.ctap.get_assertion("example.com", os.urandom(32))
+        self.assertEqual(len(self.h.verifier.messages), prompts + 1, "an expired touch approval asks again")
+
+    def test_next_silent_assertion_skips_a_passkey_deleted_meanwhile(self):
+        self.make(user_id=b"a")
+        self.make(user_id=b"b")
+        first = self.ctap.get_assertion("example.com", os.urandom(32), options={"up": False})
+        [other] = [c for c in self.h.credentials() if c.id != first.credential["id"]]
+        self.h.store.remove(self.h.requester.uid, self.h.requester.username, [other.id])
+        with self.assertRaises(CtapError) as caught:
+            self.ctap.get_next_assertion()
+        self.assertEqual(caught.exception.code, CtapError.ERR.NO_CREDENTIALS)
 
     def test_failed_assertion_uses_up_a_touch_approval(self):
         self.make()

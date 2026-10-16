@@ -341,6 +341,15 @@ class CredentialManagementTests(PinTestCase):
                     call()
                 self.assertEqual(caught.exception.code, CtapError.ERR.NOT_ALLOWED)
 
+    def test_get_next_cannot_change_requester(self):
+        _, credman = self.manager()
+        credman.enumerate_rps_begin()
+        other = replace(self.h.requester, uid=self.h.requester.uid + 1)
+        with patch.object(self.h.authenticator.resolver, "requester", other):
+            with self.assertRaises(CtapError) as caught:
+                credman.enumerate_rps_next()
+        self.assertEqual(caught.exception.code, CtapError.ERR.NOT_ALLOWED)
+
     def test_enumerations_do_not_mix(self):
         client, credman = self.manager()
         credman.enumerate_rps_begin()
