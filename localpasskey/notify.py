@@ -3,8 +3,8 @@
 The daemon runs as root, so it starts a small helper as the target user that
 talks to the notification server on that user's session bus.
 
-Notifications come in three kinds: ``ACTIVITY`` (a passkey was saved, used or
-deleted), ``PROBLEM`` (a request was refused or could not be answered) and
+Notifications come in three kinds: ``ACTIVITY`` (a passkey was saved, used,
+deleted, exported or imported), ``PROBLEM`` (a request was refused or could not be answered) and
 ``ERROR`` (something went wrong inside LocalPasskey).
 """
 

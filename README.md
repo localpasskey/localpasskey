@@ -204,7 +204,8 @@ website's account settings as well.
 working at once, in every browser, but `list --trash` still shows it and
 `restore` brings it back. Nothing in the trash expires; `purge` deletes one
 passkey permanently and asks you to type the site name first. Each user can
-keep 4096 passkeys, and passkeys in the trash count until purged. Restoring is
+keep 4096 passkeys, and passkeys in the trash count until purged. Registering
+an account again on a site moves its older passkey to the trash. Restoring is
 refused while a newer passkey for the same account on the same site exists,
 since the site would then have two live passkey IDs for one account; delete
 the newer one first.
