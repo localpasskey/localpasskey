@@ -631,7 +631,9 @@ class Authenticator:
                 requester,
                 "Passkey not saved",
                 f"No more passkeys fit on this computer, so none was saved for {site}. "
-                "Delete passkeys you no longer need with LocalPasskey or `localpasskey delete`.",
+                "Passkeys in the trash still count: delete the ones you no longer need, then "
+                "delete them permanently from the trash (View → Show Trash in LocalPasskey, or "
+                "`localpasskey list --trash` and `localpasskey purge ID`).",
                 ERROR,
             )
             raise CtapError(CTAP2_ERR_KEY_STORE_FULL) from None
