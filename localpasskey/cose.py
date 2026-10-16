@@ -6,6 +6,9 @@ from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
 ES256 = -7
 EDDSA = -8
 RS256 = -257
+# A 4096-bit RSA PKCS#8 key is about 2375 bytes. OpenSSL checks an RSA key's
+# primes while loading it, holding the GIL: a bigger key stalls the daemon.
+MAX_KEY_DER = 2450
 
 SUPPORTED_ALGORITHMS = (ES256, EDDSA, RS256)
 ALGORITHM_NAMES = {ES256: "ES256", EDDSA: "EdDSA", RS256: "RS256"}
@@ -30,6 +33,8 @@ def private_key_to_bytes(key):
 
 
 def private_key_from_bytes(data):
+    if len(data) > MAX_KEY_DER:
+        raise ValueError("the private key is too large")
     return serialization.load_der_private_key(data, password=None)
 
 

@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fido2.client import ClientError, Fido2Client
 from fido2.ctap import CtapError
 from fido2.ctap2 import Ctap2
@@ -597,6 +598,16 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(self.h.verifier.messages), prompts, "the miss waits for a touch")
         self.ctap.get_assertion("example.com", os.urandom(32))
         self.assertEqual(len(self.h.verifier.messages), prompts + 1, "the sign-in asks again")
+
+
+class KeyLoadingTests(unittest.TestCase):
+    def test_oversized_keys_are_refused_before_openssl_checks_them(self):
+        big = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+        self.assertEqual(cose.private_key_from_bytes(cose.private_key_to_bytes(big)).key_size, 4096)
+        with patch("localpasskey.cose.serialization.load_der_private_key") as load:
+            with self.assertRaisesRegex(ValueError, "too large"):
+                cose.private_key_from_bytes(bytes(cose.MAX_KEY_DER + 1))
+        load.assert_not_called()
 
 
 if __name__ == "__main__":
