@@ -74,6 +74,8 @@ class ExportDialogTests(unittest.TestCase):
         self.assertIn("b.example  bob: duplicate in the file", text)
         self.assertTrue(dialog.import_button.isEnabled())
         self.assertFalse(gui.ImportDialog(self.parent, [], skipped).import_button.isEnabled())
+        forged = gui.plan_text([{"site": "a.example", "user_name": "a\nb.example  x"}], skipped)
+        self.assertEqual(forged.split("\n\n")[0].splitlines(), ["Will be imported (1):", "  a.example  a b.example  x"])
 
 
 @unittest.skipIf(gui is None, "PyQt6 and QDarkStyle are not installed")

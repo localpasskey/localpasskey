@@ -562,13 +562,16 @@ class ExportDialog(QDialog):
 
 def plan_text(imported, skipped) -> str:
     """The import plan as plain text: one line per passkey."""
+    def clean(text):  # names come from the import file: keep each passkey on one line
+        return "".join(ch if ch.isprintable() else " " for ch in text)
+
     def line(cred):
-        return f"{cred.get('site') or '?'}  {account_label(cred)}"
+        return clean(f"{cred.get('site') or '?'}  {account_label(cred)}")
 
     lines = [f"Will be imported ({len(imported)}):", *(f"  {line(c)}" for c in imported)]
     if skipped:
         lines += ["", f"Skipped ({len(skipped)}):"]
-        lines += [f"  {line(s['credential'])}: {s['reason']}" for s in skipped]
+        lines += [f"  {line(s['credential'])}: {clean(s['reason'])}" for s in skipped]
     return "\n".join(lines)
 
 
