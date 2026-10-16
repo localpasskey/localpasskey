@@ -9,14 +9,11 @@ Writing UHID_CREATE2 to /dev/uhid makes the kernel register a HID device and a
 from __future__ import annotations
 
 import errno
-import logging
 import os
 import struct
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
-
-log = logging.getLogger(__name__)
 
 UHID_DESTROY = 1
 UHID_START = 2
@@ -60,7 +57,7 @@ FIDO_REPORT_DESCRIPTOR = bytes([
 
 
 class UhidDevice:
-    def __init__(self, name, uniq, vendor_id, product_id, version=0, path="/dev/uhid"):
+    def __init__(self, name, uniq, vendor_id, product_id, version=0):
         self.uniq = uniq
         self._write_lock = threading.Lock()
         self._hidraw: Optional[str] = None
@@ -77,7 +74,7 @@ class UhidDevice:
             version,
             0,
         ) + FIDO_REPORT_DESCRIPTOR.ljust(HID_MAX_DESCRIPTOR_SIZE, b"\0")
-        self.fd = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+        self.fd = os.open("/dev/uhid", os.O_RDWR | os.O_CLOEXEC)
         try:
             self._write(create)
         except OSError:
