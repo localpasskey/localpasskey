@@ -18,6 +18,7 @@ from localpasskey.ctap2 import Verdict
 from tests.gui_demo import start_backend
 from tests import test_control
 from tests.test_control import FakePolkit
+from tests.test_transfer import fast_kdf
 
 PASSPHRASE = "correct horse"
 
@@ -79,6 +80,7 @@ class ExportDialogTests(unittest.TestCase):
 
 
 @unittest.skipIf(gui is None, "PyQt6 and QDarkStyle are not installed")
+@fast_kdf
 class WindowTransferTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
