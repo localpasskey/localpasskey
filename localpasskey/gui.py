@@ -222,7 +222,7 @@ class PasskeyFilter(QSortFilterProxyModel):
         self.invalidateFilter()
 
     def filterAcceptsRow(self, row, parent):
-        return matches(self.sourceModel().index(row, 0, parent).data(CRED_ROLE), self.query)
+        return not self.query or matches(self.sourceModel().index(row, 0, parent).data(CRED_ROLE), self.query)
 
 
 class Details(QFrame):
@@ -803,9 +803,11 @@ class Window(QMainWindow):
     def _rebuild(self):
         selected = self._selected_id
         self.model.setHorizontalHeaderLabels(TRASH_COLUMNS if self._trash else COLUMNS)
+        self.proxy.setSourceModel(None)  # one sort and filter pass, not one per row
         self.model.removeRows(0, self.model.rowCount())
         for cred in self._creds or []:
             self.model.appendRow(passkey_row(cred, trashed=self._trash))
+        self.proxy.setSourceModel(self.model)
         self._restore(selected)
 
     def _proxy_row_of(self, cred_id):
