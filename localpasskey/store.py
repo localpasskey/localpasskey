@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -46,6 +47,16 @@ def b64encode(data: bytes) -> str:
 
 def b64decode(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+_B64URL = re.compile(r"[A-Za-z0-9_-]*={0,2}")
+
+
+def b64decode_strict(text) -> bytes:
+    """Decode untrusted base64url; ValueError if it is anything else."""
+    if not isinstance(text, str) or not _B64URL.fullmatch(text):
+        raise ValueError("not base64url")
+    return b64decode(text.rstrip("="))
 
 
 @dataclass

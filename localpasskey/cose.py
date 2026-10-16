@@ -9,6 +9,7 @@ RS256 = -257
 # A 4096-bit RSA PKCS#8 key is about 2375 bytes. OpenSSL checks an RSA key's
 # primes while loading it, holding the GIL: a bigger key stalls the daemon.
 MAX_KEY_DER = 2450
+MAX_RSA_BITS = 4096
 
 SUPPORTED_ALGORITHMS = (ES256, EDDSA, RS256)
 ALGORITHM_NAMES = {ES256: "ES256", EDDSA: "EdDSA", RS256: "RS256"}
@@ -36,6 +37,17 @@ def private_key_from_bytes(data):
     if len(data) > MAX_KEY_DER:
         raise ValueError("the private key is too large")
     return serialization.load_der_private_key(data, password=None)
+
+
+def algorithm_of(key):
+    """The algorithm this authenticator uses ``key`` with, or None if it cannot."""
+    if isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1):
+        return ES256
+    if isinstance(key, ed25519.Ed25519PrivateKey):
+        return EDDSA
+    if isinstance(key, rsa.RSAPrivateKey) and 2048 <= key.key_size <= MAX_RSA_BITS:
+        return RS256
+    return None
 
 
 def _int_bytes(value):

@@ -12,10 +12,8 @@ envelope header is the associated data, so its parameters cannot be swapped.
 
 from __future__ import annotations
 
-import binascii
 import json
 import os
-import re
 import time
 import unicodedata
 import uuid
@@ -23,13 +21,12 @@ from datetime import datetime
 from typing import Callable, List, Optional
 
 from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 from . import cose
-from .ctap2 import MAX_CREDENTIAL_ID_LENGTH, MAX_LABEL_LENGTH, MAX_USER_ID_LENGTH
-from .store import b64decode, b64encode
+from .ctap2 import MAX_CREDENTIAL_ID_LENGTH, MAX_LABEL_LENGTH, MAX_USER_ID_LENGTH, valid_rp_id
+from .store import b64decode, b64decode_strict, b64encode
 
 BACKUP_FORMAT = "localpasskey-backup"
 BACKUP_VERSION = 1
@@ -38,10 +35,8 @@ MIN_PASSPHRASE_LENGTH = 8
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**17, 8, 1  # about 0.3 s and 128 MiB
 # A hostile file must not make us allocate or compute without bound.
 MAX_SCRYPT_N, MAX_SCRYPT_R, MAX_SCRYPT_P = 2**20, 8, 4
-MAX_RP_ID_LENGTH = 253
 _SALT_SIZE = 16
 _NONCE_SIZE = 12
-_B64URL = re.compile(r"[A-Za-z0-9_-]*={0,2}")
 
 
 class TransferError(Exception):
@@ -82,7 +77,7 @@ def describe(record: dict) -> dict:
     """The control socket's ``describe`` view of a normalized record."""
     try:
         cred_id = b64decode(record.get("id") or "").hex()
-    except (ValueError, TypeError, binascii.Error):
+    except (ValueError, TypeError):
         cred_id = ""
     alg = record.get("alg")
     return {
@@ -100,11 +95,9 @@ def describe(record: dict) -> dict:
 
 
 def _binary(value, name) -> bytes:
-    if not isinstance(value, str) or not _B64URL.fullmatch(value):
-        raise _Skip(f"{name} is not base64url")
     try:
-        return b64decode(value.rstrip("="))
-    except (ValueError, binascii.Error):
+        return b64decode_strict(value)
+    except ValueError:
         raise _Skip(f"{name} is not base64url") from None
 
 
@@ -112,16 +105,6 @@ def _label(value) -> str:
     # Names are cosmetic: shorten them rather than lose the passkey. A lone
     # surrogate from a JSON escape would make every CBOR reply naming it fail.
     return value[:MAX_LABEL_LENGTH].encode("utf-8", "replace").decode() if isinstance(value, str) else ""
-
-
-def _alg_of(key) -> int:
-    if isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1):
-        return cose.ES256
-    if isinstance(key, ed25519.Ed25519PrivateKey):
-        return cose.EDDSA
-    if isinstance(key, rsa.RSAPrivateKey) and 2048 <= key.key_size <= 4096:  # control.MAX_RSA_BITS
-        return cose.RS256
-    raise _Skip("unsupported key type")
 
 
 def _record(*, cred_id: bytes, rp_id, user_id: bytes, private_key: bytes, rp_name="",
@@ -133,14 +116,15 @@ def _record(*, cred_id: bytes, rp_id, user_id: bytes, private_key: bytes, rp_nam
         raise _Skip(f"the credential ID must be 1 to {MAX_CREDENTIAL_ID_LENGTH} bytes long")
     if len(user_id) > MAX_USER_ID_LENGTH:
         raise _Skip(f"the user ID is longer than {MAX_USER_ID_LENGTH} bytes")
-    if (not isinstance(rp_id, str) or not rp_id or len(rp_id) > MAX_RP_ID_LENGTH
-            or any(ch.isspace() or not ch.isprintable() for ch in rp_id)):
+    if not valid_rp_id(rp_id):
         raise _Skip("invalid site")
     try:
         key = cose.private_key_from_bytes(private_key)
     except (ValueError, TypeError, UnsupportedAlgorithm):
         raise _Skip("the private key cannot be read") from None
-    key_alg = _alg_of(key)
+    key_alg = cose.algorithm_of(key)
+    if key_alg is None:
+        raise _Skip("unsupported key type")
     if alg is not None and alg != key_alg:
         raise _Skip("the private key does not match its algorithm")
     if not _int(cred_protect, 1, 3):

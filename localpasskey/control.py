@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import pwd
-import re
 import socket
 import struct
 import threading
@@ -27,24 +26,21 @@ import time
 from types import SimpleNamespace
 
 from cryptography.exceptions import UnsupportedAlgorithm
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
 from . import cose
 from .clientpin import MAX_PIN_BYTES, MIN_PIN_LENGTH, PIN_POLICY_VIOLATION, PinError, PinManager, pin_problem
-from .ctap2 import MAX_CREDENTIAL_ID_LENGTH, MAX_LABEL_LENGTH, MAX_USER_ID_LENGTH, Verdict, _label
+from .ctap2 import (MAX_CREDENTIAL_ID_LENGTH, MAX_LABEL_LENGTH, MAX_RP_ID_LENGTH, MAX_USER_ID_LENGTH,
+                    Verdict, _label, valid_rp_id)
 from .notify import ACTIVITY
 from .polkit import ACTION_EXPORT, ACTION_MANAGE, process_subject
-from .store import MAX_CREDENTIALS_PER_USER, Credential, StoreError, b64decode, b64encode
+from .store import MAX_CREDENTIALS_PER_USER, Credential, StoreError, b64decode_strict, b64encode
 
 log = logging.getLogger(__name__)
 
 MAX_REQUEST = 16 * 1024 * 1024  # An import of 4096 RSA passkeys fits in one request.
 MIN_ID_PREFIX = 4
-MAX_RP_ID_LENGTH = 253  # the longest DNS name
 READERS_PER_UID = 2  # each reader may hold MAX_REQUEST bytes and their parsed JSON
 CONNECTIONS_PER_UID = 8  # open connections per caller, so one uid cannot exhaust our fds
-MAX_RSA_BITS = 4096  # loading a bigger key costs seconds of CPU with the GIL held
-_B64URL = re.compile(r"[A-Za-z0-9_-]*={0,2}")
 PIN_POLICY = (f"the PIN must be at least {MIN_PIN_LENGTH} characters and at most "
               f"{MAX_PIN_BYTES} bytes long, and must not contain NUL")
 
@@ -85,14 +81,6 @@ def record(cred, private_key: bytes) -> dict:
     }
 
 
-def _key_matches(key, alg) -> bool:
-    if alg == cose.ES256:
-        return isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1)
-    if alg == cose.EDDSA:
-        return isinstance(key, ed25519.Ed25519PrivateKey)
-    return isinstance(key, rsa.RSAPrivateKey) and 2048 <= key.key_size <= MAX_RSA_BITS
-
-
 def _parse_record(index, data, store, uid) -> Credential:
     """Validate one normalized record strictly and seal its key for ``uid``."""
 
@@ -109,16 +97,18 @@ def _parse_record(index, data, store, uid) -> Credential:
     def binary(name):
         text = field(name, str)
         try:
-            if not _B64URL.fullmatch(text):
-                raise ValueError
-            return b64decode(text.rstrip("="))
-        except ValueError:  # binascii.Error is a ValueError
+            return b64decode_strict(text)
+        except ValueError:
             fail(f"{name} is not base64url")
 
     def label(name):
         text = field(name, str)
         if len(text) > MAX_LABEL_LENGTH:
             fail(f"{name} is longer than {MAX_LABEL_LENGTH} characters")
+        try:
+            text.encode("utf-8")  # a lone surrogate would break every CBOR reply naming it
+        except UnicodeEncodeError:
+            fail(f"{name} is not valid text")
         return text
 
     if not isinstance(data, dict):
@@ -130,7 +120,7 @@ def _parse_record(index, data, store, uid) -> Credential:
     if len(user_id) > MAX_USER_ID_LENGTH:
         fail(f"the user ID is longer than {MAX_USER_ID_LENGTH} bytes")
     rp_id = field("rp_id", str)
-    if not rp_id or len(rp_id) > MAX_RP_ID_LENGTH or any(ch.isspace() or not ch.isprintable() for ch in rp_id):
+    if not valid_rp_id(rp_id):
         fail(f"invalid site {rp_id[:MAX_RP_ID_LENGTH]!r}")
     alg = field("alg", int)
     if alg not in cose.SUPPORTED_ALGORITHMS:
@@ -140,7 +130,7 @@ def _parse_record(index, data, store, uid) -> Credential:
         key = cose.private_key_from_bytes(der)
     except (ValueError, TypeError, UnsupportedAlgorithm):
         fail("the private key cannot be read")
-    if not _key_matches(key, alg):
+    if cose.algorithm_of(key) != alg:
         fail(f"the private key is not a valid {cose.ALGORITHM_NAMES[alg]} key")
     cred_protect = field("cred_protect", int)
     if cred_protect not in (1, 2, 3):

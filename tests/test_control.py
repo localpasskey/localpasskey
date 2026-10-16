@@ -521,6 +521,12 @@ class ControlTests(unittest.TestCase):
             self.handle({"command": "import", "dry_run": True, "credentials": [
                 self.normalized(private_key=b64encode(cose.private_key_to_bytes(p384)))]})
 
+    def test_import_refuses_names_that_are_not_valid_text(self):
+        # json.loads turns "\\ud800" into a lone surrogate that CBOR cannot encode.
+        with self.assertRaisesRegex(ControlError, "user_name is not valid text"):
+            self.handle({"command": "import", "dry_run": True, "credentials": [self.normalized(user_name="x\ud800")]})
+        self.assertEqual(self.store.credentials(self.uid, self.name), self.creds)
+
     def test_import_refuses_oversized_rsa_keys_and_too_many_records(self):
         big = rsa.generate_private_key(public_exponent=65537, key_size=4104)
         with self.assertRaisesRegex(ControlError, "not a valid RS256 key"):
