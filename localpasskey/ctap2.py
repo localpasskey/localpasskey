@@ -28,7 +28,7 @@ from typing import List, Optional
 
 from . import __version__, cbor, clientpin, cose
 from .clientpin import PinError, PinManager
-from .ctaphid import MAX_MESSAGE
+from .ctaphid import MAX_MESSAGE, STATUS_PROCESSING
 from .notify import ACTIVITY, ERROR, PROBLEM
 from .store import (
     MAX_CREDENTIALS_PER_USER,
@@ -72,7 +72,6 @@ CTAP2_ERR_NOT_ALLOWED = 0x30
 CTAP2_ERR_INVALID_SUBCOMMAND = 0x3E
 CTAP1_ERR_OTHER = 0x7F
 
-STATUS_PROCESSING = 1
 STATUS_UPNEEDED = 2
 
 FLAG_UP = 0x01
@@ -369,10 +368,7 @@ class Authenticator:
             return bytes([CTAP1_ERR_INVALID_COMMAND])
         try:
             response = handler(self._decode_params(payload), ctx)
-        except CtapError as e:
-            log.debug("CTAP2 command 0x%02x failed: %s", command, e)
-            return bytes([e.code])
-        except PinError as e:
+        except (CtapError, PinError) as e:
             log.debug("CTAP2 command 0x%02x failed: %s", command, e)
             return bytes([e.code])
         except StoreError as e:
@@ -913,10 +909,7 @@ class Authenticator:
 
     def _residents(self, requester):
         """The requester's live discoverable passkeys, the only ones credman shows."""
-        return [c for c in self._live(requester) if c.discoverable]
-
-    def _live(self, requester):
-        return self.store.credentials(requester.uid, requester.username)
+        return [c for c in self.store.credentials(requester.uid, requester.username) if c.discoverable]
 
     def _enumerate_next(self, channel, kind):
         state = channel.credman
@@ -937,7 +930,7 @@ class Authenticator:
         return item
 
     def _creds_metadata(self, requester, sub_params, ctx):
-        live = self._live(requester)
+        live = self.store.credentials(requester.uid, requester.username)
         trashed = self.store.trash(requester.uid, requester.username)
         return {
             0x01: sum(1 for c in live if c.discoverable),
