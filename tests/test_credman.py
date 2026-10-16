@@ -111,6 +111,34 @@ class PinProtocolTests(PinTestCase):
         client.get_pin_token(PIN)  # a correct PIN restores the count
         self.assertEqual(client.get_pin_retries()[0], clientpin.MAX_PIN_RETRIES)
 
+    def test_forged_pin_macs_and_a_wrong_pin_are_refused(self):
+        protocol = PinProtocolV2()
+        key_agreement, secret = protocol.encapsulate(self.h.pins.key_agreement())
+        pin_enc = protocol.encrypt(secret, b"5678".ljust(64, b"\0"))
+        hash_enc = protocol.encrypt(secret, clientpin.pin_hash(PIN.encode()))
+        for sub_command, extra in (
+            (ClientPin.CMD.SET_PIN, {}),
+            (ClientPin.CMD.CHANGE_PIN, {"pin_hash_enc": hash_enc}),
+        ):
+            with self.subTest(sub_command=sub_command):
+                with self.assertRaises(CtapError) as caught:
+                    self.ctap.client_pin(
+                        protocol.VERSION, sub_command, key_agreement=key_agreement,
+                        new_pin_enc=pin_enc, pin_uv_param=b"\0" * 32, **extra,
+                    )
+                self.assertEqual(caught.exception.code, CtapError.ERR.PIN_AUTH_INVALID)
+                self.h.pins.set(self.uid, self.username, PIN.encode())  # CHANGE_PIN needs one
+        client = self.enrol(protocol)
+        before = self.h.pins.key_agreement()
+        self.wrong_pin(client, clientpin.MAX_PIN_RETRIES - 1)
+        self.assertNotEqual(self.h.pins.key_agreement()[-2], before[-2])
+        client.get_pin_token(PIN)
+        with self.assertRaises(CtapError) as caught:
+            self.ctap.get_assertion(
+                "example.com", b"\0" * 32, pin_uv_param=b"\0" * 32, pin_uv_protocol=2
+            )
+        self.assertEqual(caught.exception.code, CtapError.ERR.PIN_AUTH_INVALID)
+
     def wrong_pin(self, client, expected_retries):
         protocol = client.protocol
         _, secret = protocol.encapsulate(self.h.pins.key_agreement())
