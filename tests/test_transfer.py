@@ -3,6 +3,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from localpasskey import cose, transfer
 from localpasskey.store import b64decode, b64encode
 from localpasskey.transfer import TransferError, WrongPassphrase
@@ -128,6 +130,24 @@ class BackupTests(unittest.TestCase):
         self.assertIn("1 to 512 bytes", reasons[1])
         self.assertIn("unsupported algorithm", reasons[2])
         self.assertEqual(loaded.skipped[0]["credential"]["site"], "example.com")
+
+    def with_plaintext(self, plaintext):
+        doc = json.loads(transfer.export_backup([], PASSPHRASE))
+        header = {key: doc[key] for key in ("format", "version", "kdf", "cipher")}
+        key = transfer._passphrase_key(PASSPHRASE, header["kdf"])
+        nonce = b64decode(doc["nonce"])
+        doc["ciphertext"] = b64encode(AESGCM(key).encrypt(nonce, plaintext, transfer._header_aad(header)))
+        return json.dumps(doc).encode()
+
+    def test_hostile_records_do_not_crash(self):
+        good = make_record(created=10**400)
+        data = self.with_plaintext(json.dumps({"credentials": [{"id": 5, "alg": [1]}, good]}).encode())
+        loaded = transfer.load(data, lambda: PASSPHRASE)
+        self.assertEqual(loaded, [dict(good, created=0.0)])
+        self.assertEqual(len(loaded.skipped), 1)
+        nested = b'{"credentials": ' + b"[" * 100000 + b"]" * 100000 + b"}"
+        with self.assertRaises(TransferError):
+            transfer.load(self.with_plaintext(nested), lambda: PASSPHRASE)
 
     def test_labels_shortened_and_bad_created_dropped(self):
         record = make_record(user_name="x" * 400, created=float("nan"), cred_protect=7)

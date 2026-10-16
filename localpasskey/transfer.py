@@ -82,15 +82,16 @@ def describe(record: dict) -> dict:
     """The control socket's ``describe`` view of a normalized record."""
     try:
         cred_id = b64decode(record.get("id") or "").hex()
-    except (ValueError, binascii.Error):
+    except (ValueError, TypeError, binascii.Error):
         cred_id = ""
+    alg = record.get("alg")
     return {
         "id": cred_id,
         "site": record.get("rp_id", ""),
         "site_name": record.get("rp_name", ""),
         "user_name": record.get("user_name", ""),
         "display_name": record.get("user_display_name", ""),
-        "algorithm": cose.ALGORITHM_NAMES.get(record.get("alg"), str(record.get("alg"))),
+        "algorithm": cose.ALGORITHM_NAMES.get(alg, str(alg)) if isinstance(alg, int) else str(alg),
         "discoverable": record.get("discoverable", True),
         "created": record.get("created"),
         "last_used": None,
@@ -144,7 +145,7 @@ def _record(*, cred_id: bytes, rp_id, user_id: bytes, private_key: bytes, rp_nam
         raise _Skip("the private key does not match its algorithm")
     if isinstance(cred_protect, bool) or cred_protect not in (1, 2, 3):
         cred_protect = 1
-    if isinstance(created, bool) or not isinstance(created, (int, float)) or not created > 0:
+    if isinstance(created, bool) or not isinstance(created, (int, float)) or not 0 < created <= time.time():
         created = 0.0  # the daemon uses the import time
     return {
         "id": b64encode(cred_id),
@@ -252,7 +253,7 @@ def _load_backup(doc: dict, passphrase_callback: Callable[[], str]) -> Records:
         creds = json.loads(plaintext)["credentials"]
         if not isinstance(creds, list):
             raise TypeError
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, RecursionError):
         raise TransferError("This backup is damaged (bad contents)") from None
     return _collect(creds, _from_backup, "localpasskey")
 
