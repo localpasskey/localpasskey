@@ -9,6 +9,7 @@ replayed into another user's file.
 """
 
 from __future__ import annotations
+import collections
 
 import base64
 import json
@@ -358,21 +359,18 @@ class CredentialStore:
             creds = self._read(uid, username)
             picked = self._matching(creds, cred_ids, trashed=True)
             returning = {id(c) for c in picked}
+            # Count live discoverable passkeys per (rp_id, user_id) — picked ones count as
+            # live because they all come back together.
+            live_counts = collections.Counter(
+                (c.rp_id, c.user_id) for c in creds
+                if c.discoverable and (c.deleted is None or id(c) in returning)
+            )
             for cred in picked:
-                if not cred.discoverable:
-                    continue
-                for other in creds:
-                    if (
-                        other is not cred
-                        and (other.deleted is None or id(other) in returning)
-                        and other.discoverable
-                        and other.rp_id == cred.rp_id
-                        and other.user_id == cred.user_id
-                    ):
-                        raise StoreError(
-                            f"a newer passkey for this account on {cred.rp_id} exists; "
-                            "delete it first"
-                        )
+                if cred.discoverable and live_counts[(cred.rp_id, cred.user_id)] > 1:
+                    raise StoreError(
+                        f"a newer passkey for this account on {cred.rp_id} exists; "
+                        "delete it first"
+                    )
             for cred in picked:
                 cred.deleted = None
             if picked:
