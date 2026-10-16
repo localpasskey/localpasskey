@@ -14,7 +14,6 @@ validates records strictly and re-seals imported keys for the target uid.
 
 from __future__ import annotations
 
-import binascii
 import errno
 import json
 import logging
@@ -113,7 +112,7 @@ def _parse_record(index, data, store, uid) -> Credential:
             if not _B64URL.fullmatch(text):
                 raise ValueError
             return b64decode(text.rstrip("="))
-        except (ValueError, binascii.Error):
+        except ValueError:  # binascii.Error is a ValueError
             fail(f"{name} is not base64url")
 
     def label(name):

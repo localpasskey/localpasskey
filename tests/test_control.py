@@ -522,7 +522,7 @@ class ControlTests(unittest.TestCase):
                 self.normalized(private_key=b64encode(cose.private_key_to_bytes(p384)))]})
 
     def test_import_refuses_oversized_rsa_keys_and_too_many_records(self):
-        big = rsa.generate_private_key(public_exponent=65537, key_size=4160)
+        big = rsa.generate_private_key(public_exponent=65537, key_size=4104)
         with self.assertRaisesRegex(ControlError, "not a valid RS256 key"):
             self.handle({"command": "import", "dry_run": True, "credentials": [
                 self.normalized(alg=cose.RS256, private_key=b64encode(cose.private_key_to_bytes(big)))]})
