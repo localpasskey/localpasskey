@@ -1,6 +1,7 @@
 """Client PIN and credential management, driven by python-fido2 as the browser."""
 
 import hashlib
+import logging
 import os
 import unittest
 from dataclasses import replace
@@ -434,6 +435,14 @@ class CredentialManagementTests(PinTestCase):
         self.assertEqual((stored.user_name, stored.user_display_name), ("alice-renamed", "Alice Renamed"))
         entry = credman.enumerate_creds(hashlib.sha256(b"github.com").digest())[0]
         self.assertEqual(entry[RP.USER]["name"], "alice-renamed")
+
+    def test_site_names_stay_out_of_the_default_log(self):
+        client, credman = self.manager()
+        descriptor = {"id": self.creds[0].credential_data.credential_id, "type": "public-key"}
+        with self.assertLogs("localpasskey", logging.INFO) as logs:
+            credman.update_user_info(descriptor, {"id": b"alice", "name": "alice-renamed"})
+            credman.delete_cred(descriptor)
+        self.assertEqual([r.getMessage() for r in logs.records if "github.com" in r.getMessage()], [])
 
     def test_update_user_information_with_a_different_user_id(self):
         client, credman = self.manager()

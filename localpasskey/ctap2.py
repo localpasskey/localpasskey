@@ -996,7 +996,8 @@ class Authenticator:
         requester = self._requester()
         self.store.remove(requester.uid, requester.username, [cred.id])
         site, app = _label(cred.rp_id), self._app(requester)
-        log.info("Moved the passkey for %s of uid %d to the trash at a browser's request", site, requester.uid)
+        log.info("Moved a passkey of uid %d to the trash at a browser's request", requester.uid)
+        log.debug("The moved passkey is for %s", site)
         self._notify(requester, "Passkey moved to the trash", f"{app} moved the passkey for {site} to the trash.", ACTIVITY)
         return {}
 
@@ -1014,7 +1015,8 @@ class Authenticator:
             _optional_label(user, "name"),
             _optional_label(user, "displayName"),
         )
-        log.info("Renamed the account of a passkey for %s of uid %d", _label(cred.rp_id), requester.uid)
+        log.info("Renamed the account of a passkey of uid %d", requester.uid)
+        log.debug("The renamed passkey is for %s", _label(cred.rp_id))
         return {}
 
     def _credential_by_id(self, sub_params, ctx):
