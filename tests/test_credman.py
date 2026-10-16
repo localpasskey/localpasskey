@@ -449,6 +449,15 @@ class CredentialManagementTests(PinTestCase):
         )
         Fido2Client(self.h.device, "https://github.com").make_credential(options["publicKey"])
 
+    def test_one_request_looks_up_its_requester_once(self):
+        client, credman = self.manager()
+        resolver = self.h.authenticator.resolver
+        with patch.object(resolver, "resolve", wraps=resolver.resolve) as resolve:
+            credman.delete_cred({"id": self.creds[0].credential_data.credential_id, "type": "public-key"})
+            self.assertEqual(resolve.call_count, 1)
+            client.change_pin(PIN, "5678")
+            self.assertEqual(resolve.call_count, 2, "getKeyAgreement needs no requester")
+
     def test_deleting_an_unknown_passkey_is_refused(self):
         client, credman = self.manager()
         with self.assertRaises(CtapError) as caught:

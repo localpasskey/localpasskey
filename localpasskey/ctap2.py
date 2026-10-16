@@ -795,7 +795,7 @@ class Authenticator:
         requester = self._requester()
         if not clientpin.verify(protocol, secret, new_pin_enc + pin_hash_enc, pin_uv_param):
             raise PinError(clientpin.PIN_AUTH_INVALID, "invalid PIN/UV auth parameter")
-        self._check_pin(protocol, secret, pin_hash_enc)
+        self._check_pin(requester, protocol, secret, pin_hash_enc)
         pin = self._decrypt_pin(protocol, secret, new_pin_enc)
         app = self._app(requester)
         self._require_approval(
@@ -817,7 +817,7 @@ class Authenticator:
         requester = self._requester()
         # The decrypted PIN hash is exactly 16 bytes; the ciphertext's own length
         # is not checked because CBC hides how many blocks the plaintext had.
-        self._check_pin(protocol, secret, pin_hash_enc)
+        self._check_pin(requester, protocol, secret, pin_hash_enc)
         app = self._app(requester)
         # The token alone authorises deleting and renaming passkeys through
         # credential management, so this approval has to say so; the PIN alone
@@ -834,9 +834,8 @@ class Authenticator:
         token = self.pins.issue_token(requester)
         return {0x02: clientpin.encrypt(protocol, secret, token)}
 
-    def _check_pin(self, protocol, secret, pin_hash_enc):
+    def _check_pin(self, requester, protocol, secret, pin_hash_enc):
         """Spend a PIN attempt; a wrong PIN orphans the key agreement."""
-        requester = self._requester()
         digest = self._decrypt_pin_hash(protocol, secret, pin_hash_enc)
         try:
             self.pins.verify(requester.uid, requester.username, digest)
@@ -893,8 +892,8 @@ class Authenticator:
             raise CtapError(
                 CTAP2_ERR_INVALID_SUBCOMMAND, f"unsupported credential management subcommand {sub_command}"
             )
-        self._authorise_credman(params, sub_command, ctx)
-        return handler(sub_params, ctx)
+        requester = self._authorise_credman(params, sub_command, ctx)
+        return handler(requester, sub_params, ctx)
 
     def _authorise_credman(self, params, sub_command, ctx):
         if 0x04 not in params:
@@ -909,6 +908,7 @@ class Authenticator:
         message = bytes([sub_command]) + (cbor.encode(params[0x02]) if 0x02 in params else b"")
         if token is None or not clientpin.verify(protocol, token, message, param):
             raise PinError(clientpin.PIN_AUTH_INVALID, "invalid PIN/UV auth parameter")
+        return requester
 
     def _residents(self, requester):
         """The requester's live discoverable passkeys, the only ones credman shows."""
@@ -935,8 +935,7 @@ class Authenticator:
             channel.credman = None
         return item
 
-    def _creds_metadata(self, sub_params, ctx):
-        requester = self._requester()
+    def _creds_metadata(self, requester, sub_params, ctx):
         live = self._live(requester)
         trashed = self.store.trash(requester.uid, requester.username)
         return {
@@ -944,8 +943,7 @@ class Authenticator:
             0x02: max(0, MAX_CREDENTIALS_PER_USER - len(live) - len(trashed)),
         }
 
-    def _enumerate_rps_begin(self, sub_params, ctx):
-        requester = self._requester()
+    def _enumerate_rps_begin(self, requester, sub_params, ctx):
         rp_ids = sorted({c.rp_id for c in self._residents(requester)})
         entries = [self._rp_entry(rp_id) for rp_id in rp_ids]
         return self._begin_enumeration("rps", requester, entries, 0x05, ctx)
@@ -957,11 +955,10 @@ class Authenticator:
             0x04: hashlib.sha256(rp_id.encode("utf-8")).digest(),
         }
 
-    def _enumerate_creds_begin(self, sub_params, ctx):
+    def _enumerate_creds_begin(self, requester, sub_params, ctx):
         rp_id_hash = _param(sub_params, 0x01, bytes)
         if len(rp_id_hash) != 32:
             raise CtapError(CTAP1_ERR_INVALID_PARAMETER, "rpIDHash must be 32 bytes")
-        requester = self._requester()
         matching = sorted(
             (
                 c
@@ -996,9 +993,8 @@ class Authenticator:
             0x0A: cred.cred_protect,
         }
 
-    def _delete_credential(self, sub_params, ctx):
-        cred = self._credential_by_id(sub_params, ctx)
-        requester = self._requester()
+    def _delete_credential(self, requester, sub_params, ctx):
+        cred = self._credential_by_id(requester, sub_params)
         self.store.remove(requester.uid, requester.username, [cred.id])
         site, app = _label(cred.rp_id), self._app(requester)
         log.info("Moved a passkey of uid %d to the trash at a browser's request", requester.uid)
@@ -1006,13 +1002,12 @@ class Authenticator:
         self._notify(requester, "Passkey moved to the trash", f"{app} moved the passkey for {site} to the trash.", ACTIVITY)
         return {}
 
-    def _update_user_information(self, sub_params, ctx):
-        cred = self._credential_by_id(sub_params, ctx)
+    def _update_user_information(self, requester, sub_params, ctx):
+        cred = self._credential_by_id(requester, sub_params)
         user = _param(sub_params, 0x03, dict)
         user_id = _param(user, "id", bytes)
         if user_id != cred.user_id:
             raise CtapError(CTAP1_ERR_INVALID_PARAMETER, "user id does not match the passkey")
-        requester = self._requester()
         self.store.update_user(
             requester.uid,
             requester.username,
@@ -1024,12 +1019,12 @@ class Authenticator:
         log.debug("The renamed passkey is for %s", _label(cred.rp_id))
         return {}
 
-    def _credential_by_id(self, sub_params, ctx):
+    def _credential_by_id(self, requester, sub_params):
         descriptor = _param(sub_params, 0x02, dict)
         cred_id = _param(descriptor, "id", bytes)
         if _param(descriptor, "type", str) != "public-key":
             raise CtapError(CTAP1_ERR_INVALID_PARAMETER, "credentialID must be a public-key descriptor")
-        for cred in self._residents(self._requester()):
+        for cred in self._residents(requester):
             if cred.id == cred_id:
                 return cred
         raise CtapError(CTAP2_ERR_NO_CREDENTIALS)
