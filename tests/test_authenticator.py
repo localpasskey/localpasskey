@@ -394,6 +394,7 @@ class ProtocolTests(unittest.TestCase):
             ("clientPin without a subCommand", 0x06, {1: 1}, CtapError.ERR.MISSING_PARAMETER),
             ("clientPin with an unknown subCommand", 0x06, {1: 1, 2: 0x08}, CtapError.ERR.INVALID_SUBCOMMAND),
             ("clientPin with an unknown protocol", 0x06, {1: 9, 2: 1}, CtapError.ERR.INVALID_PARAMETER),
+            ("clientPin getKeyAgreement without a protocol", 0x06, {2: 2}, CtapError.ERR.MISSING_PARAMETER),
             ("credentialManagement without a subCommand", 0x0A, {3: 2, 4: b"x"}, CtapError.ERR.MISSING_PARAMETER),
             ("credentialManagement without pinUvAuthParam", 0x0A, {1: 1}, CtapError.ERR.PUAT_REQUIRED),
             ("rk in getAssertion", 0x02, {1: "example.com", 2: cdh, 5: {"rk": True}}, CtapError.ERR.UNSUPPORTED_OPTION),

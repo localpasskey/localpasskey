@@ -733,7 +733,6 @@ class Authenticator:
             raise PinError(clientpin.PIN_AUTH_INVALID, "invalid PIN/UV auth parameter")
 
     def _client_pin(self, params, ctx):
-        protocol = _auth_protocol(params, 0x01, required=False)
         sub_command = _param(params, 0x02, int)
         handler = {
             SUB_GET_PIN_RETRIES: self._pin_retries,
@@ -747,6 +746,7 @@ class Authenticator:
             # getPinUvAuthTokenUsingPinWithPermissions need the pinUvAuthToken
             # option, which getInfo deliberately does not advertise.
             raise CtapError(CTAP2_ERR_INVALID_SUBCOMMAND, f"unsupported clientPin subcommand {sub_command}")
+        protocol = _auth_protocol(params, 0x01, required=sub_command != SUB_GET_PIN_RETRIES)
         return handler(protocol, params, ctx)
 
     def _pin_retries(self, protocol, params, ctx):
@@ -754,13 +754,9 @@ class Authenticator:
         return {0x03: self.pins.retries(requester.uid, requester.username)}
 
     def _pin_key_agreement(self, protocol, params, ctx):
-        if protocol is None:
-            raise CtapError(CTAP2_ERR_MISSING_PARAMETER, "pinUvAuthProtocol missing")
         return {0x01: self.pins.key_agreement()}
 
     def _pin_secret(self, protocol, params, ctx):
-        if protocol is None:
-            raise CtapError(CTAP2_ERR_MISSING_PARAMETER, "pinUvAuthProtocol missing")
         key_agreement = _param(params, 0x03, dict)
         try:
             return self.pins.shared_secret(protocol, key_agreement)
@@ -768,8 +764,6 @@ class Authenticator:
             raise CtapError(CTAP1_ERR_INVALID_PARAMETER, str(e)) from None
 
     def _pin_set(self, protocol, params, ctx):
-        if protocol is None:
-            raise CtapError(CTAP2_ERR_MISSING_PARAMETER, "pinUvAuthProtocol missing")
         new_pin_enc = _param(params, 0x05, bytes)
         pin_uv_param = _param(params, 0x04, bytes)
         requester = self._requester()
