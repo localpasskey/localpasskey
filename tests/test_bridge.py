@@ -281,6 +281,12 @@ class BridgeFlowTests(unittest.TestCase):
         got = self.run_bridge("get", get_details(options["publicKey"]["challenge"], allow=[credential.credential_id]))
         self.assertNotIn("userHandle", got["response"])
 
+    def test_cred_protect_reaches_the_key(self):
+        created = self.run_bridge("create", create_details(
+            b"c" * 32, extensions={"credentialProtectionPolicy": "userVerificationRequired"}))
+        auth = AuthenticatorData(websafe_decode(created["response"]["authenticatorData"]))
+        self.assertEqual(auth.extensions, {"credProtect": 3})
+
     def test_excluded_credential_is_invalid_state(self):
         _, created = self.register()
         reply = self.run_bridge("create", create_details(b"c" * 32, exclude=[websafe_decode(created["rawId"])]))
