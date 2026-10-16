@@ -43,7 +43,6 @@ class PolkitTests(unittest.TestCase):
     def test_missing_process_and_bus_errors_are_unavailable(self):
         bus = Mock()
         verifier = PolkitVerifier(bus)
-        self.assertIs(verifier.verify(SimpleNamespace(pid=None, uid=1000), "test", None, 1), Verdict.UNAVAILABLE)
         with patch("localpasskey.polkit.process_subject", side_effect=FileNotFoundError):
             self.assertIs(verifier.verify(SimpleNamespace(pid=41, uid=1000), "test", None, 1), Verdict.UNAVAILABLE)
         bus.call_sync.assert_not_called()

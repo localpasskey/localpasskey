@@ -60,9 +60,6 @@ class PolkitVerifier:
         # Always a unix-process subject: polkitd 126 (Debian 13) aborts on
         # unix-session subjects. polkit maps processes outside any session
         # (apps run as systemd user units) to the user's graphical session.
-        if requester.pid is None:
-            log.warning("uid %d has no login session to show a dialog in", requester.uid)
-            return Verdict.UNAVAILABLE
         try:
             subject = process_subject(requester.pid, requester.uid)
         except (OSError, ValueError):
