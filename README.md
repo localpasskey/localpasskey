@@ -133,8 +133,8 @@ To turn it on, open `chrome://extensions`, switch on *Developer mode*, click
 extension then shows up with the ID `pocajecgdempcabeopbbdhebigifnkbf`. The
 bridge is registered for the deb packages of Google Chrome
 (`/etc/opt/chrome/native-messaging-hosts/`) and Chromium
-(`/etc/chromium/native-messaging-hosts/`). It needs `python3-fido2`, which the
-package recommends. To turn it off, disable or remove the extension.
+(`/etc/chromium/native-messaging-hosts/`). It needs `python3-fido2` 1.2 or a later 1.x,
+which the package recommends. To turn it off, disable or remove the extension.
 
 While the extension is on:
 
