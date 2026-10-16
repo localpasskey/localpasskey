@@ -151,10 +151,10 @@ class BackupTests(unittest.TestCase):
 
     def test_labels_shortened_and_bad_created_dropped(self):
         record = make_record(user_name="x" * 400, created=float("nan"), cred_protect=7)
-        loaded = self.roundtrip([record])[0]
-        self.assertEqual(len(loaded["user_name"]), 255)
-        self.assertEqual(loaded["created"], 0.0)
-        self.assertEqual(loaded["cred_protect"], 1)
+        loaded = self.roundtrip([record, make_record(cred_protect=2.0)])
+        self.assertEqual(len(loaded[0]["user_name"]), 255)
+        self.assertEqual(loaded[0]["created"], 0.0)
+        self.assertEqual([r["cred_protect"] for r in loaded], [1, 1])
 
 
 class RealKdfTests(unittest.TestCase):

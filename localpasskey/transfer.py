@@ -143,7 +143,7 @@ def _record(*, cred_id: bytes, rp_id, user_id: bytes, private_key: bytes, rp_nam
     key_alg = _alg_of(key)
     if alg is not None and alg != key_alg:
         raise _Skip("the private key does not match its algorithm")
-    if isinstance(cred_protect, bool) or cred_protect not in (1, 2, 3):
+    if not _int(cred_protect, 1, 3):
         cred_protect = 1
     if isinstance(created, bool) or not isinstance(created, (int, float)) or not 0 < created <= time.time():
         created = 0.0  # the daemon uses the import time
