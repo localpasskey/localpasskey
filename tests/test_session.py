@@ -7,7 +7,9 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from localpasskey.session import RequesterResolver, application_name, process_uid, processes_with_open
+from gi.repository import GLib
+
+from localpasskey.session import Logind, RequesterResolver, application_name, process_uid, processes_with_open
 
 
 class SessionTests(unittest.TestCase):
@@ -64,6 +66,20 @@ class SessionTests(unittest.TestCase):
         for active in (1001, None):
             with self.subTest(active=active):
                 self.assertIsNone(self.resolve({41: 1000}, active))
+
+    def test_logind_reply_parsing(self):
+        bus = Mock()
+        bus.call_sync.side_effect = [
+            GLib.Variant("(v)", (GLib.Variant("(so)", ("2", "/org/freedesktop/login1/session/_32")),)),
+            GLib.Variant("(v)", (GLib.Variant("(uo)", (1000, "/org/freedesktop/login1/user/_1000")),)),
+        ]
+        self.assertEqual(Logind(bus).active_session(), 1000)
+        bus = Mock()
+        bus.call_sync.return_value = GLib.Variant("(v)", (GLib.Variant("(so)", ("", "/")),))
+        self.assertIsNone(Logind(bus).active_session())
+        self.assertEqual(bus.call_sync.call_count, 1)
+        bus.call_sync.side_effect = GLib.Error("no logind")
+        self.assertIsNone(Logind(bus).active_session())
 
     def test_executable_name_falls_back_when_process_exits(self):
         from unittest.mock import mock_open
