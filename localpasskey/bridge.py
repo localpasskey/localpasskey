@@ -190,13 +190,11 @@ def _spki(key):
     )
 
 
-def creation_response(result, details):
+def creation_response(result):
     attestation = result.attestation_object
     credential = attestation.auth_data.credential_data
     credential_id = websafe_encode(credential.credential_id)
-    extensions = {}
-    if (details.get("extensions") or {}).get("credProps") is True:
-        extensions["credProps"] = (result.extension_results or {}).get("credProps", {})
+    extensions = dict(result.extension_results or {})
     return {
         "id": credential_id,
         "rawId": credential_id,
@@ -255,7 +253,7 @@ def ceremony(kind, details_json, cancel, open_device=open_device):
         extension_types=[CredPropsExtension, CredProtectExtension],
     )
     if kind == "create":
-        return creation_response(client.make_credential(options, event=cancel), details)
+        return creation_response(client.make_credential(options, event=cancel))
     return assertion_response(client.get_assertion(options, event=cancel))
 
 
