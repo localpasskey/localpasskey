@@ -516,6 +516,12 @@ class ControlTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "not a valid RS256 key"):
             self.handle({"command": "import", "credentials": [
                 self.normalized(alg=cose.RS256, private_key=b64encode(cose.private_key_to_bytes(small)))]})
+        good = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_numbers()
+        broken = rsa.RSAPrivateNumbers(good.p, good.q, good.d ^ 2, good.dmp1 ^ 2, good.dmq1, good.iqmp,
+                                       good.public_numbers).private_key(unsafe_skip_rsa_key_validation=True)
+        with self.assertRaisesRegex(ControlError, "not a valid RS256 key"):  # loaded unchecked, caught by signing
+            self.handle({"command": "import", "dry_run": True, "credentials": [
+                self.normalized(alg=cose.RS256, private_key=b64encode(cose.private_key_to_bytes(broken)))]})
         p384 = ec.generate_private_key(ec.SECP384R1())
         with self.assertRaisesRegex(ControlError, "not a valid ES256 key"):
             self.handle({"command": "import", "dry_run": True, "credentials": [

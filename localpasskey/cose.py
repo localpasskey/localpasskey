@@ -1,13 +1,14 @@
 """Credential key pairs and their COSE (RFC 9053) representation."""
 
+import os
+
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
 
 ES256 = -7
 EDDSA = -8
 RS256 = -257
-# A 4096-bit RSA PKCS#8 key is about 2375 bytes. OpenSSL checks an RSA key's
-# primes while loading it, holding the GIL: a bigger key stalls the daemon.
+# A 4096-bit RSA PKCS#8 key is about 2375 bytes.
 MAX_KEY_DER = 2450
 MAX_RSA_BITS = 4096
 
@@ -36,7 +37,12 @@ def private_key_to_bytes(key):
 def private_key_from_bytes(data):
     if len(data) > MAX_KEY_DER:
         raise ValueError("the private key is too large")
-    return serialization.load_der_private_key(data, password=None)
+    try:
+        # OpenSSL's RSA check holds the GIL for 0.25 s per 4096-bit key, stalling the
+        # daemon; algorithm_of checks keys from outside with a test signature instead.
+        return serialization.load_der_private_key(data, password=None, unsafe_skip_rsa_key_validation=True)
+    except TypeError:  # shortcut: cryptography < 39 cannot skip it, so imports stay slow there
+        return serialization.load_der_private_key(data, password=None)
 
 
 def algorithm_of(key):
@@ -46,6 +52,11 @@ def algorithm_of(key):
     if isinstance(key, ed25519.Ed25519PrivateKey):
         return EDDSA
     if isinstance(key, rsa.RSAPrivateKey) and 2048 <= key.key_size <= MAX_RSA_BITS:
+        message = os.urandom(32)
+        try:  # loaded unchecked: a signature that verifies proves the key is consistent
+            key.public_key().verify(sign(key, RS256, message), message, padding.PKCS1v15(), hashes.SHA256())
+        except Exception:
+            return None
         return RS256
     return None
 
