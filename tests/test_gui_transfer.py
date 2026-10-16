@@ -190,6 +190,13 @@ class WindowTransferTests(unittest.TestCase):
             self.export()
         self.assertEqual(self.window.statusBar().currentMessage(), f"Cannot write {self.path}: Permission denied")
 
+    def test_export_to_a_missing_folder_stops_before_the_password_is_asked(self):
+        self.path = os.path.join(self.tmp.name, "missing", "keys" + transfer.BACKUP_SUFFIX)
+        checks = len(self.polkit.checks)
+        self.export()
+        self.assertIn("does not exist or is not writable", self.window.statusBar().currentMessage())
+        self.assertEqual(len(self.polkit.checks), checks)
+
     def test_export_adds_the_suffix_and_never_replaces_what_was_not_confirmed(self):
         with open(self.path, "wb") as stream:
             stream.write(b"old")

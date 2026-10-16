@@ -139,7 +139,7 @@ def _apply(args, command, key, verb, prompt, done=None):
         print(f"Nothing {command}d.")
         return 1
     count = len(_ask(selector, args)[key])
-    print(f"{verb} {_plural(count)}{done or ''}.")
+    print(f"{verb} {plural(count)}{done or ''}.")
     return 0
 
 
@@ -220,7 +220,17 @@ def _fill(fd, path, data):
         raise
 
 
-def _plural(count):
+def unwritable(path):
+    """Why ``path`` cannot be written, found before any password is asked for; or None."""
+    if os.path.isdir(path):
+        return "it is a directory"
+    directory = os.path.dirname(os.path.abspath(path))
+    if not os.access(directory, os.W_OK | os.X_OK):
+        return f"{directory} does not exist or is not writable"
+    return None
+
+
+def plural(count):
     return f"{count} passkey{'s' if count != 1 else ''}"
 
 
@@ -231,11 +241,9 @@ def cmd_export(args):
         raise CliError("only --format cxf writes an unencrypted file")
     if os.path.lexists(args.file) and not args.force:
         raise CliError(f"{args.file} already exists (use --force to replace it)")
-    directory = os.path.dirname(os.path.abspath(args.file))
-    if os.path.isdir(args.file):
-        raise CliError(f"cannot write {args.file}: it is a directory")
-    if not os.access(directory, os.W_OK | os.X_OK):  # find out before the password is asked for
-        raise CliError(f"cannot write {args.file}: {directory} does not exist or is not writable")
+    problem = unwritable(args.file)
+    if problem:
+        raise CliError(f"cannot write {args.file}: {problem}")
     if not (args.all or args.site or args.ids):
         args.all = True
     selector = _selector(args, "export")
@@ -259,7 +267,7 @@ def cmd_export(args):
         write_private_file(args.file, data, overwrite=args.force)
     except OSError as e:
         raise CliError(f"cannot write {args.file}: {e.strerror or e}") from None
-    print(f"Exported {_plural(len(records))} to {args.file}.")
+    print(f"Exported {plural(len(records))} to {args.file}.")
     return 0
 
 
@@ -314,7 +322,7 @@ def cmd_import(args):
     chosen = planned_records(records, plan["imported"])
     result = _ask(_with_user({"command": "import", "credentials": chosen}, args), args)
     late = len(result["skipped"])
-    print(f"Imported {_plural(len(result['imported']))}"
+    print(f"Imported {plural(len(result['imported']))}"
           + (f"; {late} could no longer be imported:" if late else "."))
     if late:
         _print_skipped(result["skipped"])

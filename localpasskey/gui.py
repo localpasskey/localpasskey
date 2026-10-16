@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 from . import __version__, transfer
-from .cli import planned_records, write_private_file
+from .cli import planned_records, plural, unwritable, write_private_file
 from .client import ServiceUnavailable, request
 from .clientpin import MAX_PIN_RETRIES, pin_problem
 
@@ -572,7 +572,7 @@ class ImportDialog(QDialog):
         super().__init__(window)
         self.setWindowTitle("Import Passkeys")
         n = len(imported)
-        heading = QLabel(f"Import {n} passkey{'s' if n != 1 else ''}?" if n else "Nothing to import.")
+        heading = QLabel(f"Import {plural(n)}?" if n else "Nothing to import.")
         heading.setTextFormat(Qt.TextFormat.PlainText)
         self.plan = QPlainTextEdit(plan_text(imported, skipped), readOnly=True)
         self.plan.setMinimumSize(480, 240)
@@ -777,7 +777,7 @@ class Window(QMainWindow):
             return
         status, creds, pin = result
         self.show_pin_state(pin)
-        self.count_label.setText(f"{len(creds)} passkey{'s' if len(creds) != 1 else ''}")
+        self.count_label.setText(plural(len(creds)))
         self.service_label.setText("Service running")
         self.service_label.setToolTip(
             f"localpasskeyd {status['version']} · virtual security key {status.get('device') or 'missing'}"
@@ -1052,6 +1052,10 @@ class Window(QMainWindow):
         confirmed = path.endswith(transfer.BACKUP_SUFFIX)  # the dialog asked about `path`, not path + suffix
         if not confirmed:
             path += transfer.BACKUP_SUFFIX
+        problem = unwritable(path)
+        if problem:
+            self._error(f"cannot write {path}: {problem}")
+            return
         if not self._start("Waiting for you to authenticate…"):
             return
         selector, passphrase = dialog.selector(), dialog.passphrase.text()
@@ -1065,7 +1069,7 @@ class Window(QMainWindow):
             return len(records)
 
         self.tasks.run(work, lambda count, error: self._finish(
-            error, f"Exported {count} passkey{'s' if count != 1 else ''}"))
+            error, f"Exported {plural(count)}"))
 
     def import_passkeys(self):
         if self._busy:
@@ -1126,7 +1130,7 @@ class Window(QMainWindow):
 
         def done(result, error):
             n = len(result["imported"]) if result else 0
-            self._finish(error, f"Imported {n} passkey{'s' if n != 1 else ''}")
+            self._finish(error, f"Imported {plural(n)}")
 
         self.tasks.run(lambda: request({"command": "import", "credentials": chosen}), done)
 
