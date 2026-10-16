@@ -1,3 +1,39 @@
+localpasskey (0.3.1) unstable; urgency=medium
+
+  * Security: a sign-in approval is tied to the site and request it was
+    given for, and saving a passkey always shows its own dialog, so another
+    program of the same user can no longer reuse an approval silently.
+  * Security: the control socket bounds what one local account can tie up
+    (open connections, memory held during a dialog, a caller that stops
+    reading, RSA key checks during an import), so it cannot take passkeys
+    offline for other users.
+  * Security: site names are refused at registration when an import would
+    refuse them, and are never echoed raw to a terminal; notification text
+    no longer appears in the process list; the check for who has the
+    virtual key open can no longer be fooled by path tricks; site names
+    are no longer logged at info level.
+  * Export: backups are synced to disk before "Exported" is reported, a
+    missing or unwritable folder or an existing file is refused before any
+    password is asked, no hidden copy is left behind on Ctrl-C, and the
+    export dialog no longer mentions a passphrase for unencrypted CXF.
+  * Import: hostile or damaged files no longer crash the import or forge
+    lines in the window's plan; bad entries are listed as skipped. Names
+    holding invalid Unicode and keys bigger than 4096-bit RSA are refused.
+  * Fix: passkeys with very short imported IDs, or IDs that start another
+    passkey's ID, can be deleted, restored, purged and exported again.
+  * Change: registering an account again moves the older passkey to the
+    trash instead of erasing it.
+  * Change: a PIN that breaks the policy is refused before the
+    authentication dialog; an empty --user is an error.
+  * Fix: Bitwarden creation dates, Python 3.9 and 3.10 compatibility, the
+    window's column sizing, and several smaller window fixes.
+  * Packaging: the bridge recommends python3-fido2 (>= 1.2, << 2); the
+    service may stop a hung notification helper (CAP_KILL).
+  * Docs: the 4096-passkey limit, export and import notifications, and the
+    code layout are documented.
+
+ -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Fri, 16 Oct 2026 11:13:28 +0000
+
 localpasskey (0.3.0) unstable; urgency=medium
 
   * Feature: export and import passkeys (CLI `export`/`import`, window File
