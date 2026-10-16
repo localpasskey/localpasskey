@@ -201,8 +201,10 @@ class WindowTransferTests(unittest.TestCase):
         with open(self.path, "wb") as stream:
             stream.write(b"old")
         self.path = self.path[:-len(transfer.BACKUP_SUFFIX)]
+        checks = len(self.polkit.checks)
         self.export()
-        self.assertIn("File exists", self.window.statusBar().currentMessage())
+        self.assertIn("already exists", self.window.statusBar().currentMessage())
+        self.assertEqual(len(self.polkit.checks), checks)  # refused before the password is asked for
         with open(self.path + transfer.BACKUP_SUFFIX, "rb") as stream:
             self.assertEqual(stream.read(), b"old")
         os.unlink(self.path + transfer.BACKUP_SUFFIX)

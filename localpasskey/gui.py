@@ -1056,7 +1056,7 @@ class Window(QMainWindow):
         confirmed = path.endswith(transfer.BACKUP_SUFFIX)  # the dialog asked about `path`, not path + suffix
         if not confirmed:
             path += transfer.BACKUP_SUFFIX
-        problem = unwritable(path)
+        problem = unwritable(path) or ("it already exists" if not confirmed and os.path.lexists(path) else None)
         if problem:
             self._error(f"cannot write {path}: {problem}")
             return
