@@ -31,7 +31,7 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
 from . import cose
-from .clientpin import MAX_PIN_BYTES, MIN_PIN_LENGTH, PIN_POLICY_VIOLATION, PinError, PinManager
+from .clientpin import MAX_PIN_BYTES, MIN_PIN_LENGTH, PIN_POLICY_VIOLATION, PinError, PinManager, pin_problem
 from .ctap2 import MAX_CREDENTIAL_ID_LENGTH, MAX_LABEL_LENGTH, MAX_USER_ID_LENGTH, Verdict, _label
 from .notify import ACTIVITY
 from .polkit import ACTION_EXPORT, ACTION_MANAGE, process_subject
@@ -46,6 +46,8 @@ READERS_PER_UID = 2  # each reader may hold MAX_REQUEST bytes and their parsed J
 CONNECTIONS_PER_UID = 8  # open connections per caller, so one uid cannot exhaust our fds
 MAX_RSA_BITS = 4096  # loading a bigger key costs seconds of CPU with the GIL held
 _B64URL = re.compile(r"[A-Za-z0-9_-]*={0,2}")
+PIN_POLICY = (f"the PIN must be at least {MIN_PIN_LENGTH} characters and at most "
+              f"{MAX_PIN_BYTES} bytes long, and must not contain NUL")
 
 
 class ControlError(Exception):
@@ -380,6 +382,8 @@ class ControlServer:
             pin = request.get("pin")
             if not isinstance(pin, str):
                 raise ControlError("the PIN must be a string")
+            if pin_problem(pin):  # before the dialog, not after the user typed their password
+                raise ControlError(PIN_POLICY)
             message = "Set a new PIN for the passkeys stored on this computer?"
         else:
             message = "Remove the PIN for the passkeys stored on this computer?"
@@ -391,10 +395,7 @@ class ControlServer:
                 self.pins.remove(target_uid, username)
         except PinError as e:
             if e.code == PIN_POLICY_VIOLATION:
-                raise ControlError(
-                    f"the PIN must be at least {MIN_PIN_LENGTH} characters and at most "
-                    f"{MAX_PIN_BYTES} bytes long, and must not contain NUL"
-                ) from None
+                raise ControlError(PIN_POLICY) from None
             raise ControlError(str(e)) from None
         log.info("%s the PIN of uid %d at the request of uid %d",
                  "Set" if action == "set" else "Removed", target_uid, uid)

@@ -337,6 +337,7 @@ class ControlTests(unittest.TestCase):
                 self.handle({"command": "pin", "action": "set", "pin": pin})
         with self.assertRaisesRegex(ControlError, "PIN must be at least 4 characters"):
             self.handle({"command": "pin", "action": "set", "pin": "123"})
+        self.assertEqual(self.polkit.checks, [], "a PIN the policy refuses is refused before any prompt")
         for action in ("get", "", None):
             with self.subTest(action=action), self.assertRaises(ControlError):
                 self.handle({"command": "pin", "action": action})
