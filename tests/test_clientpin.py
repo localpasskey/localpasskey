@@ -181,6 +181,7 @@ class PinManagerTestCase(unittest.TestCase):
             ("a" * 64, None, "At most 63 bytes"),
             ("ä" * 32, None, "At most 63 bytes"),  # 32 code points, 64 bytes
             ("12\x0034", None, "No NUL characters"),
+            ("\ud800abcd", None, "Use valid characters"),
             ("1234", "1235", "The PINs do not match"),
             ("1234", "", None),  # the repeat is only compared once it is typed
             ("1234", None, None),

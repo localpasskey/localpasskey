@@ -69,7 +69,11 @@ def pin_problem(pin: str, repeat: Optional[str] = None) -> Optional[str]:
         return "Enter a PIN"
     if len(pin) < MIN_PIN_LENGTH:
         return f"At least {MIN_PIN_LENGTH} characters"
-    if len(pin.encode("utf-8", "surrogatepass")) > MAX_PIN_BYTES:
+    try:
+        size = len(pin.encode("utf-8"))
+    except UnicodeEncodeError:  # a lone surrogate, which the daemon could never encode
+        return "Use valid characters"
+    if size > MAX_PIN_BYTES:
         return f"At most {MAX_PIN_BYTES} bytes"
     if "\0" in pin:
         return "No NUL characters"
