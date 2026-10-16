@@ -1047,14 +1047,19 @@ class Window(QMainWindow):
         # The save dialog has already asked before replacing an existing file.
         path, _ = QFileDialog.getSaveFileName(self, "Export Passkeys", default,
                                               f"LocalPasskey backup (*{transfer.BACKUP_SUFFIX})")
-        if not path or not self._start("Waiting for you to authenticate…"):
+        if not path:
+            return
+        confirmed = path.endswith(transfer.BACKUP_SUFFIX)  # the dialog asked about `path`, not path + suffix
+        if not confirmed:
+            path += transfer.BACKUP_SUFFIX
+        if not self._start("Waiting for you to authenticate…"):
             return
         selector, passphrase = dialog.selector(), dialog.passphrase.text()
 
         def work():
             records = request({"command": "export", **selector})["credentials"]
             try:
-                write_private_file(path, transfer.export_backup(records, passphrase), overwrite=True)
+                write_private_file(path, transfer.export_backup(records, passphrase), overwrite=confirmed)
             except OSError as e:  # not str(e): that names the hidden temporary file
                 raise OSError(f"cannot write {path}: {e.strerror or e}") from None
             return len(records)

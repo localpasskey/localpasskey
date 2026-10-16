@@ -190,6 +190,19 @@ class WindowTransferTests(unittest.TestCase):
             self.export()
         self.assertEqual(self.window.statusBar().currentMessage(), f"Cannot write {self.path}: Permission denied")
 
+    def test_export_adds_the_suffix_and_never_replaces_what_was_not_confirmed(self):
+        with open(self.path, "wb") as stream:
+            stream.write(b"old")
+        self.path = self.path[:-len(transfer.BACKUP_SUFFIX)]
+        self.export()
+        self.assertIn("File exists", self.window.statusBar().currentMessage())
+        with open(self.path + transfer.BACKUP_SUFFIX, "rb") as stream:
+            self.assertEqual(stream.read(), b"old")
+        os.unlink(self.path + transfer.BACKUP_SUFFIX)
+        self.export()
+        self.assertTrue(os.path.exists(self.path + transfer.BACKUP_SUFFIX))
+        self.assertFalse(os.path.exists(self.path))
+
     def test_export_of_the_selected_site_only(self):
         github = next(row for row in range(self.window.proxy.rowCount())
                       if self.window.proxy.index(row, 0).data(gui.CRED_ROLE)["site"] == "github.com")
