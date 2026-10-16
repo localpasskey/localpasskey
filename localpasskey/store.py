@@ -200,7 +200,7 @@ class CredentialStore:
             raise StoreError(f"{path} has an unexpected format or uid")
         if doc.get("user") != username:
             raise StoreError(
-                f"{path} belongs to user {doc.get('user')!r}, not {username!r}. The uid"
+                f"{path} belongs to user {doc.get('user')!r}, not {username!r}. The uid "
                 "was reused or the account renamed; move the file away or correct "
                 'its "user" field.'
             )
