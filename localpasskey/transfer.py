@@ -385,8 +385,8 @@ def _bitwarden_id(text) -> bytes:
 
 def _iso_time(text) -> Optional[float]:
     try:
-        return datetime.fromisoformat(text).timestamp()
-    except (TypeError, ValueError, OverflowError):
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()  # "Z" only from Python 3.11
+    except (AttributeError, ValueError, OverflowError):
         return None
 
 

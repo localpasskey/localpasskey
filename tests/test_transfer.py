@@ -278,6 +278,7 @@ class BitwardenTests(unittest.TestCase):
             bitwarden_credential(record, keyValue="!!"),
             bitwarden_credential(record, rpId=""),
             bitwarden_credential(record, creationDate="yesterday"),
+            bitwarden_credential(record, creationDate=5),
         )
         loaded = transfer.load(data, self.fail)
         self.assertEqual([s["reason"] for s in loaded.skipped], [
@@ -285,7 +286,7 @@ class BitwardenTests(unittest.TestCase):
             "the private key is not base64url",
             "invalid site",
         ])
-        self.assertEqual(loaded[0]["created"], 0.0)
+        self.assertEqual([r["created"] for r in loaded], [0.0, 0.0])
 
     def test_lone_surrogate_in_a_name_replaced(self):
         record = make_record()
