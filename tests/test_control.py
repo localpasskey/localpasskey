@@ -518,6 +518,41 @@ class ControlTests(unittest.TestCase):
             with self.subTest(request), self.assertRaises(ControlError):
                 self.handle({"command": "delete", **request})
 
+    def test_full_ids_select_even_short_ones_and_prefixes_of_others(self):
+        self.handle({"command": "import", "credentials": [
+            self.normalized(id=b"\xab\xcd", user_id=b64encode(b"1")),
+            self.normalized(id=b"\xab\xcd\xef", user_id=b64encode(b"2")),
+            self.normalized(id=b"\x01", user_id=b64encode(b"3")),
+        ]})
+        [deleted] = self.handle({"command": "delete", "ids": ["abcd"]})["deleted"]
+        self.assertEqual(deleted["id"], "abcd")
+        ids = [c["id"] for c in self.handle({"command": "list"})["credentials"]]
+        self.assertIn("01", ids)
+        self.assertEqual(len(self.handle({"command": "delete", "ids": ids})["deleted"]), 5)
+
+    def test_an_ambiguous_id_prefix_acts_on_nothing(self):
+        for n in (1, 2):
+            cid = b"\xab\xcd" + bytes([n]) + os.urandom(29)
+            key = cose.private_key_to_bytes(cose.generate_private_key(cose.ES256))
+            self.store.add(self.uid, self.name, Credential(
+                id=cid, rp_id="example.com", user_id=bytes([n]), alg=cose.ES256,
+                sealed_key=self.store.seal(self.uid, cid, key), created=time.time()))
+        for command in ("delete", "export"):
+            with self.subTest(command), self.assertRaisesRegex(ControlError, "ambiguous"):
+                self.handle({"command": command, "ids": ["abcd0"]})
+        self.assertEqual(len(self.store.credentials(self.uid, self.name)), 5)
+        self.assertEqual(self.polkit.checks, [])
+
+    def test_the_same_passkey_named_twice_is_selected_once(self):
+        full, other = self.creds[0].id.hex(), self.creds[1].id.hex()
+        for ids in ([full, full], [full[:12], full], [full, full[:12].upper()]):
+            with self.subTest(ids=ids):
+                self.assertEqual(len(self.handle({"command": "delete", "ids": ids, "dry_run": True})["deleted"]), 1)
+        deleted = self.handle({"command": "delete", "ids": [other, full.upper(), other[:8]], "dry_run": True})
+        self.assertEqual([c["id"] for c in deleted["deleted"]], [other, full])
+        self.handle({"command": "delete", "ids": [full[:12], full]})
+        self.assertIn("Move 1 passkey ", self.polkit.checks[-1][2])
+
     def test_malformed_or_conflicting_delete_selectors_never_delete(self):
         for selector in (
             {"all": "false"}, {"all": 1}, {"all": True, "site": "example.com"},

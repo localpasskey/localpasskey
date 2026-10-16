@@ -452,18 +452,26 @@ class ControlServer:
         elif request.get("site"):
             selected = [c for c in creds if c.rp_id == request["site"]]
         else:
-            selected = []
-            for prefix in request["ids"]:
-                prefix = prefix.lower()
-                if len(prefix) < MIN_ID_PREFIX:
-                    raise ControlError(f"passkey ID {prefix!r} is too short (use at least {MIN_ID_PREFIX} characters)")
-                matches = [c for c in creds if c.id.hex().startswith(prefix)]
+            by_hex = {c.id.hex(): c for c in creds}
+            prefixes = dict.fromkeys(prefix.lower() for prefix in request["ids"])
+            if len(prefixes) > MAX_CREDENTIALS_PER_USER:
+                raise ControlError("too many passkey IDs")
+            chosen = {}
+            for prefix in prefixes:
+                # A full ID always wins: clients send back the full IDs they listed.
+                if prefix in by_hex:
+                    matches = [by_hex[prefix]]
+                else:
+                    if len(prefix) < MIN_ID_PREFIX:
+                        raise ControlError(
+                            f"passkey ID {prefix!r} is too short (use at least {MIN_ID_PREFIX} characters)")
+                    matches = [c for h, c in by_hex.items() if h.startswith(prefix)]
                 if not matches:
                     raise ControlError(f"no passkey with ID {prefix}")
                 if len(matches) > 1:
                     raise ControlError(f"passkey ID {prefix} is ambiguous")
-                if matches[0] not in selected:
-                    selected.append(matches[0])
+                chosen.setdefault(matches[0].id, matches[0])
+            selected = list(chosen.values())
         if not selected:
             raise ControlError("no matching passkeys")
         return selected
