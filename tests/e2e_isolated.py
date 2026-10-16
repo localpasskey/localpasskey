@@ -81,9 +81,9 @@ def client_main(stage, root, device_path):
         assert "Restored 2 passkeys." in cli("restore", "--site", "example.com", "--yes")
         assert len(json.loads(cli("list", "--json"))) == 3
         assert cli("list", "--trash").strip() == "The trash is empty."
-        assert "Moved 1 passkey to the trash." in cli("delete", "--all", "--yes")
+        assert "Moved 3 passkeys to the trash." in cli("delete", "--all", "--yes")
         assert json.loads(cli("list", "--json")) == []
-        assert "Restored 1 passkey." in cli("restore", "--all", "--yes")
+        assert "Restored 3 passkeys." in cli("restore", "--all", "--yes")
         assert len(json.loads(cli("list", "--json"))) == 3
         print("CLI status/list/delete/trash/restore: OK")
         return
