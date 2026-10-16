@@ -346,13 +346,14 @@ class CredentialStore:
         with self._lock:
             creds = self._read(uid, username)
             picked = self._matching(creds, cred_ids, trashed=True)
+            returning = {id(c) for c in picked}
             for cred in picked:
                 if not cred.discoverable:
                     continue
                 for other in creds:
                     if (
                         other is not cred
-                        and (other.deleted is None or other in picked)
+                        and (other.deleted is None or id(other) in returning)
                         and other.discoverable
                         and other.rp_id == cred.rp_id
                         and other.user_id == cred.user_id
