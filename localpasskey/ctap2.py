@@ -242,8 +242,9 @@ def valid_rp_id(rp_id) -> bool:
 
 def _optional_label(container, key):
     """A name field that CTAP lets clients send as null."""
-    value = _param(container, key, str, None)
-    return "" if value is None else value[:MAX_LABEL_LENGTH]
+    if container.get(key) is None:
+        return ""
+    return _param(container, key, str)[:MAX_LABEL_LENGTH]
 
 
 def _descriptor_ids(descriptors):

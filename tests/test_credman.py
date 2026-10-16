@@ -13,6 +13,7 @@ from fido2.ctap import CtapError
 from fido2.ctap2 import Ctap2
 from fido2.ctap2.credman import CredentialManagement
 from fido2.ctap2.pin import ClientPin, PinProtocolV1, PinProtocolV2
+from fido2.hid import CTAPHID
 from fido2.server import Fido2Server
 from fido2.webauthn import (
     PublicKeyCredentialDescriptor,
@@ -21,7 +22,7 @@ from fido2.webauthn import (
     ResidentKeyRequirement,
 )
 
-from localpasskey import clientpin
+from localpasskey import cbor, clientpin
 from localpasskey.clientpin import PinManager
 from localpasskey.store import MAX_CREDENTIALS_PER_USER
 from localpasskey.ctap2 import Verdict
@@ -489,6 +490,17 @@ class CredentialManagementTests(PinTestCase):
             credman.update_user_info(descriptor, {"id": b"alice", "name": "alice-renamed"})
             credman.delete_cred(descriptor)
         self.assertEqual([r.getMessage() for r in logs.records if "github.com" in r.getMessage()], [])
+
+    def test_update_user_information_clears_a_null_name(self):
+        client, credman = self.manager()
+        cred_id = self.creds[0].credential_data.credential_id
+        # python-fido2 cannot encode null, so the request is built by hand.
+        sub_params = {2: {"id": cred_id, "type": "public-key"}, 3: {"id": b"alice", "name": None}}
+        mac = client.protocol.authenticate(credman.pin_uv.token, b"\x07" + cbor.encode(sub_params))
+        request = cbor.encode({1: 7, 2: sub_params, 3: client.protocol.VERSION, 4: mac})
+        self.assertEqual(self.h.device.call(CTAPHID.CBOR, b"\x0a" + request)[0], 0)
+        [stored] = [c for c in self.h.credentials() if c.id == cred_id]
+        self.assertEqual((stored.user_name, stored.user_display_name), ("", ""))
 
     def test_update_user_information_with_a_different_user_id(self):
         client, credman = self.manager()
