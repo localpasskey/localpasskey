@@ -782,8 +782,7 @@ class Window(QMainWindow):
         self.service_label.setToolTip(
             f"localpasskeyd {status['version']} · virtual security key {status.get('device') or 'missing'}"
         )
-        if (trashed, creds) != (self._trash, self._creds):
-            self._trash = trashed
+        if creds != self._creds:
             self._creds = creds
             self._rebuild()
 
