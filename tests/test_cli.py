@@ -414,6 +414,8 @@ class CliTransferTests(unittest.TestCase):
             (("export", path + "3", "--unencrypted"), [], "only --format cxf"),
             (("export", path + "4"), ["short", "short"], "at least 8 characters"),
             (("export", path + "5"), ["long enough", "different"], "the passphrases do not match"),
+            (("export", os.path.join(self.tmp, "missing", "keys")), [], "not writable"),
+            (("export", self.tmp, "--force"), [], "is a directory"),
         ]
         for args, passphrases, message in cases:
             with self.subTest(args=args):

@@ -233,6 +233,11 @@ def cmd_export(args):
         raise CliError("only --format cxf writes an unencrypted file")
     if os.path.lexists(args.file) and not args.force:
         raise CliError(f"{args.file} already exists (use --force to replace it)")
+    directory = os.path.dirname(os.path.abspath(args.file))
+    if os.path.isdir(args.file):
+        raise CliError(f"cannot write {args.file}: it is a directory")
+    if not os.access(directory, os.W_OK | os.X_OK):  # find out before the password is asked for
+        raise CliError(f"cannot write {args.file}: {directory} does not exist or is not writable")
     if not (args.all or args.site or args.ids):
         args.all = True
     selector = _selector(args, "export")
