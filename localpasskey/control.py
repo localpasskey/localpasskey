@@ -40,7 +40,9 @@ log = logging.getLogger(__name__)
 MAX_REQUEST = 16 * 1024 * 1024  # An import of 4096 RSA passkeys fits in one request.
 MIN_ID_PREFIX = 4
 READERS_PER_UID = 2  # each reader may hold MAX_REQUEST bytes and their parsed JSON
+READER_WAIT = 10.0  # seconds a request waits for a reader slot
 CONNECTIONS_PER_UID = 8  # open connections per caller, so one uid cannot exhaust our fds
+BUSY = b'{"ok": false, "error": "too many requests in progress"}\n'
 PIN_POLICY = (f"the PIN must be at least {MIN_PIN_LENGTH} characters and at most "
               f"{MAX_PIN_BYTES} bytes long, and must not contain NUL")
 
@@ -209,18 +211,22 @@ class ControlServer:
                 conn.settimeout(10)  # also bounds the reply: a caller that stops reading is dropped
                 slot = self._slot(uid)
                 if not slot.connections.acquire(blocking=False):
-                    conn.sendall(b'{"ok": false, "error": "too many requests in progress"}\n')
+                    conn.sendall(BUSY)
                     return
                 try:
                     # Held until the reply is sent: the parsed request lives through the dialog.
-                    with slot.readers:
+                    # Bounded, so a queued request fails before its client (180 s) gives up.
+                    if not slot.readers.acquire(timeout=READER_WAIT):
+                        conn.sendall(BUSY)
+                        return
+                    try:
                         with conn.makefile("rb") as stream:
                             data = stream.readline(MAX_REQUEST + 1)
                         if len(data) > MAX_REQUEST or not data.endswith(b"\n"):
                             return
                         try:
                             request, error = json.loads(data), None
-                        except ValueError as e:
+                        except (ValueError, RecursionError) as e:
                             request, error = None, {"ok": False, "error": f"bad request: {e}"}
                         del data
                         try:
@@ -233,6 +239,8 @@ class ControlServer:
                             log.exception("Control request failed")
                             response = {"ok": False, "error": f"internal error: {e}"}
                         conn.sendall(json.dumps(response).encode() + b"\n")
+                    finally:
+                        slot.readers.release()
                 finally:
                     slot.connections.release()
             except OSError as e:

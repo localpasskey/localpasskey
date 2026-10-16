@@ -732,6 +732,31 @@ class ControlTests(unittest.TestCase):
             for _ in range(7):
                 connections.release()
 
+    def test_a_request_queued_behind_dialogs_gives_up_before_its_client(self):
+        self.server.start()
+        readers = self.server._slot(os.getuid()).readers
+        readers.acquire()
+        readers.acquire()  # two requests sit at a dialog
+        try:
+            with patch("localpasskey.control.READER_WAIT", 0.2):
+                with self.assertRaisesRegex(client.ServiceError, "too many requests"):
+                    client.request({"command": "status"}, self.server.path)
+        finally:
+            readers.release()
+            readers.release()
+        self.assertEqual(client.request({"command": "status"}, self.server.path), {"ok": True, "version": "test"})
+
+    def test_deeply_nested_json_gets_a_clean_reply(self):
+        self.server.start()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(5)
+            sock.connect(self.server.path)
+            sock.sendall(b"[" * 200000 + b"\n")
+            with sock.makefile("rb") as stream:
+                reply = json.loads(stream.readline())
+        self.assertFalse(reply["ok"])
+        self.assertIn("bad request", reply["error"])
+
     def test_a_request_waiting_for_authentication_keeps_its_reader_slot(self):
         self.server.start()
         asking, answer = threading.Event(), threading.Event()
