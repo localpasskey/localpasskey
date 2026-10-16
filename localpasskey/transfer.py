@@ -67,6 +67,10 @@ def passphrase_problem(passphrase: str, repeat: Optional[str] = None) -> Optiona
         return "Enter a passphrase to encrypt your export."
     if len(unicodedata.normalize("NFC", passphrase)) < MIN_PASSPHRASE_LENGTH:  # count what the key sees
         return f"At least {MIN_PASSPHRASE_LENGTH} characters"
+    try:
+        passphrase.encode("utf-8", "surrogateescape")
+    except UnicodeEncodeError:
+        return "Use valid characters"
     if repeat and repeat != passphrase:
         return "The passphrases do not match"
     return None
@@ -166,7 +170,8 @@ def _peek(entry) -> dict:
 
 def _passphrase_key(passphrase: str, kdf: dict) -> bytes:
     # NFC so the same passphrase typed with another input method still works.
-    secret = unicodedata.normalize("NFC", passphrase).encode("utf-8")
+    # surrogateescape: getpass in a non-UTF-8 locale hands over undecodable bytes that way.
+    secret = unicodedata.normalize("NFC", passphrase).encode("utf-8", "surrogateescape")
     return Scrypt(salt=b64decode(kdf["salt"]), length=32, n=kdf["n"], r=kdf["r"], p=kdf["p"]).derive(secret)
 
 

@@ -51,6 +51,12 @@ class BackupTests(unittest.TestCase):
         with self.assertRaises(WrongPassphrase):
             self.roundtrip([make_record()], passphrase="wrong horse")
 
+    def test_passphrase_with_undecodable_bytes_round_trips(self):
+        # What getpass returns for a byte that is not UTF-8 in a C or POSIX locale.
+        records = [make_record(cose.ES256)]
+        data = transfer.export_backup(records, "abcdefgh\udcff")
+        self.assertEqual(transfer.load(data, lambda: "abcdefgh\udcff"), records)
+
     def test_passphrase_is_unicode_normalized(self):
         data = transfer.export_backup([make_record()], "café au lait")
         self.assertEqual(len(transfer.load(data, lambda: "café au lait")), 1)
@@ -314,6 +320,7 @@ class PassphraseProblemTests(unittest.TestCase):
             ("", None, "Enter a passphrase to encrypt your export."),
             ("1234567", None, "At least 8 characters"),
             ("e\u0301" * 4, None, "At least 8 characters"),
+            ("abcdefgh\ud800", None, "Use valid characters"),
             ("12345678", None, None),
             ("12345678", "", None),
             ("12345678", "1234", "The passphrases do not match"),
