@@ -45,8 +45,9 @@ block further attempts until the service restarts.
 .PP
 A user can have any number of passkeys, including several accounts for the
 same site; for sign-ins without a user name the browser shows an account
-chooser. Passkeys are device-bound: they are not synchronised or backed up
-anywhere.
+chooser. Passkeys are device-bound: they are not synchronised, and they leave
+the computer only in an export you ask for and approve; see
+.BR localpasskey (1).
 .SH OPTIONS
 .TP
 .BI \-\-config " file"
@@ -85,8 +86,8 @@ the USB IDs of the virtual device.
 .B notifications
 turns all desktop notifications on or off;
 .B activity_notifications
-controls the ones shown when a passkey is saved, used, moved to the trash or
-permanently deleted, as opposed
+controls the ones shown when a passkey is saved, used, moved to the trash,
+permanently deleted, exported or imported, as opposed
 to those about declined, timed-out or failed requests.
 .TP
 .I /var/lib/localpasskey/users/UID/credentials.json
@@ -102,10 +103,12 @@ number of attempts left. Present only while a PIN is set.
 .I /usr/share/polkit-1/actions/org.localpasskey.policy
 polkit actions
 .B org.localpasskey.authenticate
-(create or use a passkey) and
+(create or use a passkey),
 .B org.localpasskey.manage
-(move passkeys to the trash, restore or permanently delete them, and set
-or remove the PIN).
+(move passkeys to the trash, restore or permanently delete them, import
+passkeys, and set or remove the PIN) and
+.B org.localpasskey.export
+(export passkeys with their private keys).
 .SH SECURITY
 Approving the dialog is the only thing that stops a website from using
 your passkeys, so do not grant

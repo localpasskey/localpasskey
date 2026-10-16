@@ -83,7 +83,11 @@ localpasskey/
 ├── store.py      # per-user passkeys on disk, sealed with AES-256-GCM
 ├── clientpin.py  # the CTAP2 PIN/UV protocols and the PIN browsers set
 ├── control.py    # the control socket the CLI and window talk to
-├── cli.py        # the `localpasskey` commands: list, delete, restore, purge, pin
+├── cli.py        # the `localpasskey` commands: list, delete, restore, purge, pin, export, import
+├── client.py     # the control socket client the CLI and window use
+├── transfer.py   # backup (.lpkbackup), CXF and Bitwarden files; encrypts backups, parses imports
+├── config.py     # reads /etc/localpasskey/localpasskeyd.conf
+├── notify.py     # desktop notifications in the user's session
 └── gui.py        # the Qt window
 ```
 
@@ -160,7 +164,8 @@ While the extension is on:
 
 Security notes: the website's origin comes from Chrome, which checked it
 against the site's rp ID (related origins included); the bridge refuses
-origins that are not https and builds the signed client data itself. Chrome
+origins that are not https (other than http://localhost) and builds the
+signed client data itself. Chrome
 starts the bridge only for the extension ID above. The bridge talks to the
 LocalPasskey key and to no other security key. The confirmation dialog names
 the browser that started the bridge, for example *"Chromium wants to sign in
@@ -198,7 +203,8 @@ website's account settings as well.
 `delete` moves a passkey to the **trash** instead of destroying it: it stops
 working at once, in every browser, but `list --trash` still shows it and
 `restore` brings it back. Nothing in the trash expires; `purge` deletes one
-passkey permanently and asks you to type the site name first. Restoring is
+passkey permanently and asks you to type the site name first. Each user can
+keep 4096 passkeys, and passkeys in the trash count until purged. Restoring is
 refused while a newer passkey for the same account on the same site exists,
 since the site would then have two live passkey IDs for one account; delete
 the newer one first.
@@ -246,7 +252,8 @@ JSON export (`.json`, not the password-protected or account-encrypted kinds,
 which are refused). It shows what it will import and what it skips and why,
 then asks for your password. A passkey is skipped when it is already here
 (also in the trash), when a passkey for the same account on the same site
-exists, or when it appears twice in the file. The file is read and decrypted
+exists, when it appears twice in the file, when it cannot be read, or when
+the store is full (4096 passkeys, the trash included). The file is read and decrypted
 by the command as you; the service only receives the passkeys, checks them
 again and seals them for this computer and your user.
 
@@ -299,7 +306,7 @@ refused by a site that checks counters; register a new passkey there instead.
 notifications, the log level, and the USB IDs of the virtual key.
 
 LocalPasskey shows a desktop notification when a passkey is saved, used to sign
-in, moved to the trash or permanently deleted, so you notice any use you didn't
+in, moved to the trash, permanently deleted, exported or imported, so you notice any use you didn't
 expect. It also shows one when a request is declined, times out or fails, when
 a site asks for a passkey this computer doesn't have, and when no confirmation
 dialog can be shown. Set `activity_notifications = no` to keep only the problem
@@ -374,6 +381,7 @@ service after changes. Logs: `journalctl -u localpasskey`.
 make check                                # unit, mock, socket/CLI and offscreen GUI tests
 sudo python3 -m tests.e2e_isolated --user "$USER"  # temporary real HID device; cleans up
 sudo ./bin/localpasskeyd --debug --state-dir /tmp/lpk --socket /tmp/lpk.sock
+LOCALPASSKEY_SOCKET=/tmp/lpk.sock ./bin/localpasskey list   # in another terminal; or ./bin/localpasskey-gui
 python3 -m tests.e2e_device               # real round trip over /dev/hidraw
 python3 tests/browser/serve.py            # test page for browsers at http://localhost:8765/
 python3 -m tests.gui_demo                 # the window with sample passkeys, no service needed

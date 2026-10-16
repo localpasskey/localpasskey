@@ -68,8 +68,9 @@ does not destroy a passkey: it moves it to the trash, where it stops
 working but can still be listed and brought back. Passkeys stay in the
 trash until
 .B purge
-removes one for good; nothing expires on its own. Every command that
-changes something asks for your password through polkit, and over SSH
+removes one for good; nothing expires on its own.
+Each user can keep 4096 passkeys; passkeys in the trash count until purged.
+Every command that changes something asks for your password through polkit, and over SSH
 uses
 .BR pkttyagent (1)
 to ask in the terminal.
