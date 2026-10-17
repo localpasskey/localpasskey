@@ -119,9 +119,11 @@ in
 for that.
 .PP
 .B Include authenticator codes
-in the export dialog, checked by default, adds your authenticator codes with
-their setup keys to the backup; it is disabled when you have none. Such a
-backup cannot be opened by LocalPasskey 0.3.1 or earlier.
+in the export dialog adds your authenticator codes with their setup keys to
+the backup, or only those for the website when you export one website's
+passkeys. It is checked by default when you have codes, and greyed out when
+you have none. A backup with codes cannot be opened by LocalPasskey 0.3.1 or
+earlier.
 .PP
 .B Import Passkeys\[u2026]
 opens a LocalPasskey backup, a CXF file or an unencrypted Bitwarden JSON
