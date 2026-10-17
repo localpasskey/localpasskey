@@ -80,10 +80,11 @@ localpasskey/
 ├── session.py    # maps a request to the Linux user who sent it
 ├── bridge.py     # native messaging host for the Chrome/Chromium extension
 ├── polkit.py     # asks for confirmation; the trust boundary
-├── store.py      # per-user passkeys on disk, sealed with AES-256-GCM
+├── store.py      # per-user passkeys and authenticator codes on disk, sealed with AES-256-GCM
+├── totp.py       # authenticator codes: otpauth:// links, setup keys, RFC 6238 codes
 ├── clientpin.py  # the CTAP2 PIN/UV protocols and the PIN browsers set
 ├── control.py    # the control socket the CLI and window talk to
-├── cli.py        # the `localpasskey` commands: list, delete, restore, purge, pin, export, import
+├── cli.py        # the `localpasskey` commands: list, delete, restore, purge, pin, totp, export, import
 ├── client.py     # the control socket client the CLI and window use
 ├── transfer.py   # backup (.lpkbackup), CXF and Bitwarden files; encrypts backups, parses imports
 ├── config.py     # reads /etc/localpasskey/localpasskeyd.conf
@@ -274,6 +275,75 @@ unless they have seen a non-zero counter for the passkey before. A passkey
 imported from Bitwarden or another manager that counted may therefore be
 refused by a site that checks counters; register a new passkey there instead.
 
+## Authenticator codes
+
+LocalPasskey can also keep **authenticator codes** (TOTP, the six-digit codes
+of RFC 6238 that authenticator apps show) for sites that still ask for one as
+a second step. They live on this computer beside your passkeys, in the same
+root-only store. Codes complement passkeys and do not replace them: where a
+site offers a passkey, use it, because a code can be phished (a fake site can
+ask for it and pass it on at once) and a passkey cannot.
+
+When a site shows its setup QR code, it usually also offers the text behind it
+("can't scan it?"): an `otpauth://totp/...` link or a setup key such as
+`JBSW Y3DP EHPK 3PXP`. Paste either one; LocalPasskey does not read QR codes
+or watch the clipboard. The setup key (the seed) goes to the service and never
+comes back out, except in an export you approve.
+
+```sh
+localpasskey totp add --site github.com   # paste the link or setup key when asked
+localpasskey totp list                    # your codes, without the codes themselves
+localpasskey totp code github             # by site, issuer, account or ID prefix
+localpasskey totp edit 9c4e --account octocat
+localpasskey totp delete 9c4e             # to the trash
+localpasskey totp list --trash
+localpasskey totp restore 9c4e
+localpasskey totp purge 9c4e              # for good; asks you to type the site
+localpasskey totp settings                # is a password needed to show codes?
+```
+
+`totp add` reads the link or setup key without echoing it, never from the
+command line, shows what it will save and asks for your password. `totp code`
+prints only the code, and how long it stays valid on stderr. Counter-based
+(HOTP) codes, Steam codes and Google Authenticator's `otpauth-migration`
+export links are not supported.
+
+In the window, the **Authenticator Codes** tab next to *Passkeys* lists your
+codes by website and account. Opening the tab asks for your password once;
+then the current codes are shown with a countdown and refresh by themselves.
+*Code → Add Code…* (Ctrl+N) takes the pasted link or setup key and checks it
+as you type, *Copy Code* (Ctrl+C) copies the current code and clears the
+clipboard 30 seconds later, and *Edit…*, *Move to Trash…*, *Restore* and
+*Delete Permanently…* work as they do for passkeys. The tab locks again when
+you leave it or close the window, and codes are hidden while the window is in
+the background.
+
+Showing codes is protected by your password by default. *File → Settings…*
+(or `localpasskey totp settings --require-password no`) turns that off;
+turning it off asks for your password, turning it back on does not. With the
+setting on, a program unlocks the codes once (polkit action
+`org.localpasskey.totp`) and may then show them without asking again until
+it has made no code request for 5 minutes, locks them, or exits, or until the
+service restarts. Each unlock belongs to the process that asked for it. While
+unlocked, adding, editing, deleting and restoring codes do not ask again;
+permanent deletion always does. `totp code` keeps no unlock: with the
+setting on, it asks every time.
+
+Deleted codes go to their own trash, like passkeys: `totp restore` brings them
+back, nothing expires, and `totp purge` deletes one for good. Each user can
+keep 4096 authenticator codes, apart from the 4096 passkeys; codes in the
+trash count until purged.
+
+Backups made with `localpasskey export` or the window's export include your
+authenticator codes, setup keys and all, unless you pass `--no-codes` or clear
+*Include authenticator codes* in the window; the trash is never exported. A
+backup that holds codes uses backup format version 2, which LocalPasskey 0.3.1
+and earlier refuse to open instead of silently dropping the codes; a backup
+without codes is unchanged. `import` restores codes from such a backup and
+skips one that is already on this computer (also in the trash), appears
+twice in the file, or does not fit (4096 codes, the trash included). CXF and Bitwarden files carry no authenticator codes in
+either direction.
+
 ## Security model
 
 * Private keys never leave the root-only directory `/var/lib/localpasskey`,
@@ -291,9 +361,18 @@ refused by a site that checks counters; register a new passkey there instead.
   encrypted with a passphrase you choose (then your login password allows it), and
   you can also back up `/var/lib/localpasskey` (including `master.key`). Keep
   either backup safe; whoever has it can use the passkeys.
+* Authenticator code seeds get the same protection as passkey keys: they stay
+  in `/var/lib/localpasskey`, sealed under `master.key` and bound to your uid,
+  and leave only in an export you approve. While codes are unlocked, or when
+  you turned the password setting off, any process running as you can ask for
+  the current codes (not the seeds) without a dialog. Root can read every
+  user's codes without asking, and whoever has `master.key` and the store has
+  the seeds. No code is shown, copied or put in a notification without the
+  protection you configured.
 * The polkit action `org.localpasskey.authenticate` defaults to `auth_self`.
   Never relax it to `yes` in a polkit rule: any website could then use your
-  passkeys silently.
+  passkeys silently. The same goes for `org.localpasskey.totp`, which guards
+  showing authenticator codes.
 * Requests are refused unless the processes holding the virtual key open (root's
   aside) all belong to the user of the active local session, or when the daemon
   can't tell which user they belong to. The daemon can't tell which of those
@@ -308,7 +387,9 @@ notifications, the log level, and the USB IDs of the virtual key.
 
 LocalPasskey shows a desktop notification when a passkey is saved, used to sign
 in, moved to the trash, permanently deleted, exported or imported, so you notice any use you didn't
-expect. It also shows one when a request is declined, times out or fails, when
+expect. Authenticator codes get the same notifications when they are added,
+moved to the trash, permanently deleted, exported or imported; a code itself
+never appears in one. It also shows one when a request is declined, times out or fails, when
 a site asks for a passkey this computer doesn't have, and when no confirmation
 dialog can be shown. Set `activity_notifications = no` to keep only the problem
 notifications, or `notifications = no` to turn them all off. Restart the
