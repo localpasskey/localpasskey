@@ -630,6 +630,9 @@ class TotpControlTests(unittest.TestCase):
         self.store._totp_path(self.uid).write_text("{not json")
         reply = self.raw({"command": "export", "all": True})
         self.assertEqual((len(reply["exported"]), reply["exported_codes"], reply["codes"]), (1, [], []))
+        ids = [c["id"] for c in reply["exported"]]
+        reply = self.raw({"command": "export", "ids": ids, "codes": True})  # IDs never select codes
+        self.assertEqual((len(reply["exported"]), reply["exported_codes"], reply["codes"]), (1, [], []))
         [record] = reply["credentials"]
         reply = self.raw({"command": "import", "credentials": [dict(record, id=b64encode(os.urandom(32)),
                                                                      user_id="dw")]})

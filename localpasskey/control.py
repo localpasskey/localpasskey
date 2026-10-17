@@ -456,7 +456,9 @@ class ControlServer:
         for field, kind in (("codes", bool), ("code_ids", list)):
             if field in request and not isinstance(request[field], kind):
                 raise ControlError(f"invalid {field} selector")
-        with_codes = bool(request.get("codes") or request.get("code_ids"))
+        # Passkey IDs select no codes, even with "codes" set.
+        with_codes = bool(request.get("code_ids")
+                          or (request.get("codes") and (request.get("all") or request.get("site"))))
         # A passkey-only export never reads totp.json, so a damaged one cannot break it.
         live_codes = self.store.totp_entries(target_uid, username) if with_codes else []
         if request.get("code_ids"):
