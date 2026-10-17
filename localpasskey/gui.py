@@ -837,7 +837,7 @@ class CodeDialog(QDialog):
         self._sync()
 
     def _sync(self, *_):
-        site = self.site.text().strip()
+        site = totp.normalize_site(self.site.text())
         problem = self.problem
         if problem is None and site and not valid_rp_id(site):
             problem = "The website must be a name such as github.com"
@@ -845,7 +845,7 @@ class CodeDialog(QDialog):
         self.save_button.setEnabled(problem is None)
 
     def labels(self):
-        return {"site": self.site.text().strip(), "issuer": self.issuer.text().strip(),
+        return {"site": totp.normalize_site(self.site.text()), "issuer": self.issuer.text().strip(),
                 "account": self.account.text().strip()}
 
     def entry(self):

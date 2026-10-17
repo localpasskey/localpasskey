@@ -203,6 +203,14 @@ class CodeTests(unittest.TestCase):
         dialog.account.setText(" octo ")
         self.assertEqual(dialog.labels(), {"site": "github.com", "issuer": "GitHub", "account": "octo"})
 
+    def test_a_typed_website_is_reduced_to_its_host_name(self):
+        dialog = gui.CodeDialog(self.parent, {"site": "", "issuer": " GitHub ", "account": " octocat "})
+        dialog.site.setText(" https://GitHub.com/login ")
+        self.assertTrue(dialog.save_button.isEnabled())
+        self.assertEqual(dialog.labels(), {"site": "github.com", "issuer": "GitHub", "account": "octocat"})
+        dialog.site.setText("https://not a site/")
+        self.assertFalse(dialog.save_button.isEnabled())
+
     def test_purge_asks_for_the_stripped_site_else_issuer_else_delete(self):
         cases = [({"site": " github.com ", "issuer": "GitHub"}, "github.com"),
                  ({"site": "", "issuer": " Example Bank "}, "Example Bank"),
