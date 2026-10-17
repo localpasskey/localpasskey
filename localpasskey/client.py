@@ -22,11 +22,11 @@ def socket_path() -> str:
     return os.environ.get("LOCALPASSKEY_SOCKET", DEFAULT_SOCKET)
 
 
-def request(payload: dict, path: Optional[str] = None) -> dict:
+def request(payload: dict, path: Optional[str] = None, timeout: float = 180) -> dict:
     path = path or socket_path()
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC) as sock:
-            sock.settimeout(180)  # Allow the management authentication dialog to finish.
+            sock.settimeout(timeout)  # 180 s by default: allow the management authentication dialog to finish.
             sock.connect(path)
             sock.sendall(json.dumps(payload).encode() + b"\n")
             with sock.makefile("rb") as stream:

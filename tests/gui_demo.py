@@ -1,4 +1,5 @@
-"""Open the window against a stand-in for localpasskeyd with sample passkeys.
+"""Open the window against a stand-in for localpasskeyd with sample passkeys
+and authenticator codes.
 
     python3 -m tests.gui_demo
 
@@ -12,10 +13,10 @@ import sys
 import tempfile
 import time
 
-from localpasskey import cose
+from localpasskey import cose, totp
 from localpasskey.control import ControlServer
 from localpasskey.ctap2 import Verdict
-from localpasskey.store import Credential, CredentialStore
+from localpasskey.store import Credential, CredentialStore, TotpEntry
 
 # site, site name, user name, display name, passkey?, created (days ago), last used (hours ago)
 SAMPLES = [
@@ -32,6 +33,14 @@ SAMPLES = [
 TRASHED = [
     ("github.com", "GitHub", "octocat-old", "The Octocat", 200, 7),
     ("gitlab.com", "GitLab", "alice@example.com", "Alice Example", 15, 2),
+]
+
+# site, issuer, account, setup key, algorithm, digits, period, trashed?
+CODES = [
+    ("github.com", "GitHub", "octocat", "JBSWY3DPEHPK3PXP", "SHA1", 6, 30, False),
+    ("google.com", "Google", "alice@example.com", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SHA1", 6, 30, False),
+    ("", "Example Bank", "alice", "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U", "SHA256", 8, 60, False),
+    ("gitlab.com", "GitLab", "alice@example.com", "ONSWG4TFOQYTEMZUGU3DOOBZGAYTEMZU", "SHA1", 6, 30, True),
 ]
 
 
@@ -78,6 +87,17 @@ def start_backend():
             if record.id == cred_id:
                 record.deleted = deleted_at
     store._write(uid, username, records)
+    trashed_codes = []
+    for site, issuer, account, key, algorithm, digits, period, trashed in CODES:
+        entry_id = os.urandom(16)
+        store.totp_add(uid, username, TotpEntry(
+            id=entry_id, sealed_secret=store.seal(uid, b"totp\0" + entry_id, totp.decode_secret(key)),
+            site=site, issuer=issuer, account=account, algorithm=algorithm, digits=digits, period=period,
+            created=now - 20 * 86400,
+        ))
+        if trashed:
+            trashed_codes.append(entry_id)
+    store.totp_remove(uid, username, trashed_codes)
 
     path = os.path.join(tmp.name, "control.sock")
     server = ControlServer(path, store, SlowApproval(), lambda: {"version": "demo", "device": "/dev/hidraw-demo"})

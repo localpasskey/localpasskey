@@ -226,7 +226,8 @@ class WindowTransferTests(unittest.TestCase):
         dialog, asked = self.import_file([PASSPHRASE], accept=False)
         self.assertEqual(asked.call_count, 1)
         self.assertFalse(dialog.import_button.isEnabled())
-        self.assertEqual(dialog.plan.toPlainText().count("already on this computer"), 7)
+        # 7 passkeys and the 3 live authenticator codes the export took along.
+        self.assertEqual(dialog.plan.toPlainText().count("already on this computer"), 10)
 
         fresh = test_control.ControlTests.normalized(None)
         with open(self.path, "wb") as stream:
