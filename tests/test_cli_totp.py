@@ -598,6 +598,41 @@ class TtyAgentTests(unittest.TestCase):
                 popen.assert_not_called()
 
 
+class OpenTtyTests(unittest.TestCase):
+    def test_opens_a_real_terminal(self):
+        # A pseudo-terminal is no seekable file: the mocks above cannot catch a mode that refuses it.
+        import pty
+
+        pid, master = pty.fork()
+        if pid == 0:  # the child has the pseudo-terminal as its controlling terminal
+            ok = False
+            try:
+                tty = cli._open_tty()
+                if tty is not None:
+                    tty.write("Save? [y/N] ")
+                    ok = tty.readline() == "y\n"
+                    tty.close()
+            finally:
+                os._exit(0 if ok else 1)
+        try:
+            prompt = b""
+            while b"[y/N] " not in prompt:
+                chunk = os.read(master, 1024)
+                if not chunk:
+                    break
+                prompt += chunk
+            os.write(master, b"y\n")
+            _, status = os.waitpid(pid, 0)
+        finally:
+            os.close(master)
+        self.assertIn(b"Save? [y/N] ", prompt)
+        self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+
+    def test_none_without_a_terminal(self):
+        with patch("localpasskey.cli.os.open", side_effect=OSError(6, "No such device or address")):
+            self.assertIsNone(cli._open_tty())
+
+
 class HelpTests(unittest.TestCase):
     def help(self, *args):
         with contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit):

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import getpass
+import io
 import json
 import math
 import os
@@ -115,9 +116,11 @@ def cmd_list(args):
 def _open_tty():
     """The controlling terminal, or None without one (cron, a detached session)."""
     try:
-        return open("/dev/tty", "r+", encoding="utf-8")
+        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY | os.O_CLOEXEC)
     except OSError:
         return None
+    # Unbuffered: open(..., "r+") wants a seekable file, which a terminal is not.
+    return io.TextIOWrapper(io.FileIO(fd, "r+"), encoding="utf-8", write_through=True)
 
 
 def _start_tty_agent():
