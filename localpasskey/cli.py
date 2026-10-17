@@ -278,9 +278,10 @@ def plural_codes(count):
 
 
 def join_counts(passkeys, codes):
-    """ "3 passkeys and 2 authenticator codes", omitting a part that is zero."""
+    """ "3 passkeys and 2 authenticator codes", omitting a part that is zero;
+    "0 passkeys" when both are, as passkey-only messages always said."""
     parts = ([plural(passkeys)] if passkeys else []) + ([plural_codes(codes)] if codes else [])
-    return " and ".join(parts) or "nothing"
+    return " and ".join(parts) or plural(0)
 
 
 def cmd_export(args):

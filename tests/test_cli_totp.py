@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from localpasskey import cli, totp, transfer
-from localpasskey.control import code_record
+from localpasskey.control import _parse_record, code_record
+from localpasskey.ctap2 import Verdict
 from localpasskey.polkit import ACTION_EXPORT, ACTION_MANAGE, ACTION_TOTP
 from localpasskey.store import TotpEntry, b64encode
 from tests import test_control
@@ -398,6 +399,33 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertTrue(all("codes" not in call.args[0] for call in sent.call_args_list))
         self.assertIn("Imported 1 passkey.", out)
+
+    def test_import_with_nothing_left_after_the_dialog_says_0_passkeys(self):
+        fresh = self.fixture.normalized()
+        path = os.path.join(self.tmp, "fresh.lpkbackup")
+        with open(path, "wb") as stream:
+            stream.write(transfer.export_backup([fresh], self.PASSPHRASE))
+
+        def imported_meanwhile(subject, action_id, message, cancelled=None, timeout=120.0):
+            store = self.fixture.store
+            store.add(self.fixture.uid, self.fixture.name, _parse_record(0, fresh, store, self.fixture.uid))
+            return Verdict.APPROVED
+
+        self.fixture.polkit.check = imported_meanwhile
+        code, out, err = self.run_cli("import", path, "--yes", passphrases=[self.PASSPHRASE])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Imported 0 passkeys; 1 could no longer be imported:", out)
+
+    def test_export_with_nothing_left_after_the_dialog_says_0_passkeys(self):
+        def deleted_meanwhile(subject, action_id, message, cancelled=None, timeout=120.0):
+            self.fixture.store.remove(self.fixture.uid, self.fixture.name, [c.id for c in self.fixture.creds])
+            return Verdict.APPROVED
+
+        self.fixture.polkit.check = deleted_meanwhile
+        path = os.path.join(self.tmp, "keys.lpkbackup")
+        code, out, err = self.run_cli("export", path, passphrases=[self.PASSPHRASE] * 2)
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"Exported 0 passkeys to {path}.", out)
 
 
 class CliTotpProcessTests(unittest.TestCase):

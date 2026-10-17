@@ -27,7 +27,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(cli.join_counts(1, 1), "1 passkey and 1 authenticator code")
         self.assertEqual(cli.join_counts(1, 0), "1 passkey")
         self.assertEqual(cli.join_counts(0, 2), "2 authenticator codes")
-        self.assertEqual(cli.join_counts(0, 0), "nothing")
+        self.assertEqual(cli.join_counts(0, 0), "0 passkeys", "passkey-only messages read as in 0.3.1")
 
     def test_the_ids_shown_in_the_preview_are_the_only_ones_sent(self):
         credential = {
