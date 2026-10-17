@@ -200,7 +200,8 @@ class TotpControlTests(unittest.TestCase):
         self.assertEqual(code["period"], 30)
         self.assertIn(code["code"], {totp.code(SECRET, now=now + d)[0] for d in (0, 2)},
                       "computed with the daemon's clock, not the client's")
-        self.assertTrue(1 <= code["remaining"] <= 30)
+        self.assertIsInstance(code["remaining"], float)
+        self.assertTrue(0 <= code["remaining"] <= 30)
         self.handle({"action": "code", "ids": [added["id"]]})
         self.assertEqual(len(self.polkit.checks), 1, "an unlocked process is not asked again")
 

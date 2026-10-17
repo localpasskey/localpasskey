@@ -13,6 +13,7 @@ import argparse
 import contextlib
 import getpass
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -502,7 +503,7 @@ def cmd_totp_code(args):
         raise CliError(f"no authenticator code with ID {matches[0]['id']}")  # deleted during the dialog
     [code] = reply["codes"]
     print(code["code"])
-    print(f"valid for {code['remaining']} more seconds", file=sys.stderr)
+    print(f"valid for {math.ceil(code['remaining'])} more seconds", file=sys.stderr)
     return 0
 
 

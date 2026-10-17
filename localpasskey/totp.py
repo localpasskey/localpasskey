@@ -151,10 +151,11 @@ def code(
     digits: int = 6,
     period: int = 30,
     now: Optional[float] = None,
-) -> Tuple[str, int]:
-    """The current RFC 6238 code and the seconds it stays valid (1..period)."""
-    seconds = int(time.time() if now is None else now)
-    return hotp(secret, seconds // period, algorithm, digits), period - seconds % period
+) -> Tuple[str, float]:
+    """The current RFC 6238 code and the seconds it stays valid, to the millisecond."""
+    now = time.time() if now is None else now
+    # The fraction too: clients that drop it show an expired code for up to a second.
+    return hotp(secret, int(now) // period, algorithm, digits), round(period - now % period, 3)
 
 
 def normalize_site(text: str) -> str:

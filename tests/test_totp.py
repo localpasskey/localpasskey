@@ -35,14 +35,16 @@ class CodeTests(unittest.TestCase):
 
     def test_remaining_seconds(self):
         self.assertEqual(totp.code(SECRET, now=0)[1], 30)
-        self.assertEqual(totp.code(SECRET, now=29.9)[1], 1)
+        self.assertEqual(totp.code(SECRET, now=29.9)[1], 0.1)
+        self.assertEqual(totp.code(SECRET, now=1.25)[1], 28.75)
+        self.assertEqual(totp.code(SECRET, now=29.9)[0], totp.code(SECRET, now=0)[0])
         self.assertEqual(totp.code(SECRET, now=30)[1], 30)
         self.assertEqual(totp.code(SECRET, period=60, now=61)[1], 59)
 
     def test_default_now_and_six_digits(self):
         got, remaining = totp.code(SECRET)
         self.assertRegex(got, r"^[0-9]{6}$")
-        self.assertTrue(1 <= remaining <= 30)
+        self.assertTrue(0 <= remaining <= 30)
 
 
 class SecretTests(unittest.TestCase):
