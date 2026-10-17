@@ -17,6 +17,7 @@ the setup keys never leave the service except in an export.
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import threading
@@ -490,7 +491,7 @@ class CodeDetails(QFrame):
             self.countdown.setText("")
         else:
             self.code.setText(grouped(value[0]))
-            left = max(0, round(value[1] - time.monotonic()))
+            left = max(0, math.ceil(value[1] - time.monotonic()))
             self.countdown.setText(f"Changes in {left} s")
         self.copy_button.setEnabled(value is not None)
 
@@ -999,6 +1000,8 @@ class Window(QMainWindow):
         self._timer = QTimer(self, interval=REFRESH_MS, timeout=self.refresh)
         self._timer.start()
         self._tick = QTimer(self, interval=TICK_MS, timeout=self._on_tick)
+        # Fires when the first code runs out, so an old code is not shown until the next tick.
+        self._rollover = QTimer(self, singleShot=True, timerType=Qt.TimerType.PreciseTimer, timeout=self._on_tick)
         self._clipboard_timer = QTimer(self, singleShot=True, timerType=Qt.TimerType.PreciseTimer,
                                        timeout=self._expire_copied)
         self._show(None)
@@ -1135,6 +1138,7 @@ class Window(QMainWindow):
         held = self._unlocked or self._unlocking
         self._unlocked = False
         self._tick.stop()
+        self._rollover.stop()
         self._values = {}
         if held and tell:
             self._send_lock(wait)
@@ -1180,6 +1184,11 @@ class Window(QMainWindow):
 
     def _show_values(self, values):
         self._values = values
+        if values:  # a few ms late, so the tick sees the code as run out
+            left = min(until for _, until, _ in values.values()) - time.monotonic()
+            self._rollover.start(max(0, math.ceil(left * 1000)) + 5)
+        else:
+            self._rollover.stop()
         if self._codes_tab and not self._trash:
             for row in range(self.model.rowCount()):
                 entry = self.model.item(row, 0).data(CRED_ROLE)

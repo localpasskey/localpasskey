@@ -645,12 +645,22 @@ class CodesTabTests(unittest.TestCase):
         self.window._values[self.window._selected_id] = (code, time.monotonic() + 12.2, period)
         with patch.object(self.window, "_fetch_codes") as fetch:
             self.window._on_tick()
-        self.assertEqual(self.window.code_details.countdown.text(), "Changes in 12 s")
+        self.assertEqual(self.window.code_details.countdown.text(), "Changes in 13 s", "rounded up, as the CLI")
         fetch.assert_not_called()
         self.window._values[self.window._selected_id] = ("000000", time.monotonic() - 0.1, period)
         self.window._on_tick()
         self.wait_for(lambda: self.window._values[self.window._selected_id][1] > time.monotonic())
         self.assertEqual(self.window._values[self.window._selected_id][0], self.expected("github.com"))
+
+    def test_a_code_is_fetched_again_right_when_it_runs_out_not_at_the_next_tick(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.window._tick.stop()
+        with patch.object(self.window, "_fetch_codes") as fetch:
+            self.window._show_values({k: (c, time.monotonic() + 0.2, p) for k, (c, _, p) in self.window._values.items()})
+            QTest.qWait(100)
+            fetch.assert_not_called()
+            self.wait_for(lambda: fetch.called)
 
     def test_an_inactive_window_blanks_the_codes_and_fetches_none(self):
         self.open_codes()
