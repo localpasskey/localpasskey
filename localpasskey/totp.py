@@ -112,6 +112,11 @@ def parse(text: str) -> dict:
     for key, value in parse_qsl(url.query, keep_blank_values=True):
         params.setdefault(key.lower(), value)
 
+    encoder = params.get("encoder", "").strip().lower()
+    if encoder == "steam":
+        raise OtpError("Steam codes are not supported")
+    if encoder:
+        raise OtpError("the encoder parameter is not supported")  # its codes are not RFC 6238 digits
     if "secret" not in params:
         raise OtpError("the link has no secret parameter")
     result["secret"] = decode_secret(params["secret"])

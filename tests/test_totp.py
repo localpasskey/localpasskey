@@ -155,10 +155,16 @@ class ParseTests(unittest.TestCase):
             f"otpauth://totp/x?secret={KEY}&digits=7": "digits",
             f"otpauth://totp/x?secret={KEY}&digits=": "digits",
             f"otpauth://totp/x?secret={KEY}&algorithm=MD5": "algorithm",
+            f"otpauth://totp/Steam:me?secret={KEY}&issuer=Steam&encoder=steam": "Steam codes are not supported",
+            f"otpauth://totp/x?secret={KEY}&Encoder=STEAM": "Steam codes are not supported",
+            f"otpauth://totp/x?secret={KEY}&encoder=yandex": "the encoder parameter is not supported",
         }
         for text, message in cases.items():
             with self.assertRaisesRegex(OtpError, message, msg=text):
                 totp.parse(text)
+
+    def test_an_empty_encoder_is_ignored(self):
+        self.assertEqual(totp.parse(f"otpauth://totp/x?secret={KEY}&encoder=")["secret"], SECRET)
 
     def test_oversize_input(self):
         with self.assertRaisesRegex(OtpError, "too long"):
