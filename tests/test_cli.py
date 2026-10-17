@@ -20,6 +20,15 @@ from tests.test_transfer import fast_kdf
 
 
 class CliTests(unittest.TestCase):
+    def test_count_words(self):
+        self.assertEqual((cli.plural_codes(1), cli.plural_codes(0), cli.plural_codes(2)),
+                         ("1 authenticator code", "0 authenticator codes", "2 authenticator codes"))
+        self.assertEqual(cli.join_counts(3, 2), "3 passkeys and 2 authenticator codes")
+        self.assertEqual(cli.join_counts(1, 1), "1 passkey and 1 authenticator code")
+        self.assertEqual(cli.join_counts(1, 0), "1 passkey")
+        self.assertEqual(cli.join_counts(0, 2), "2 authenticator codes")
+        self.assertEqual(cli.join_counts(0, 0), "nothing")
+
     def test_the_ids_shown_in_the_preview_are_the_only_ones_sent(self):
         credential = {
             "id": "1234" * 16, "site": "example.com", "deleted": 1000.0, "created": 0,

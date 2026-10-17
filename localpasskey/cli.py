@@ -234,6 +234,16 @@ def plural(count):
     return f"{count} passkey{'s' if count != 1 else ''}"
 
 
+def plural_codes(count):
+    return f"{count} authenticator code{'s' if count != 1 else ''}"
+
+
+def join_counts(passkeys, codes):
+    """ "3 passkeys and 2 authenticator codes", omitting a part that is zero."""
+    parts = ([plural(passkeys)] if passkeys else []) + ([plural_codes(codes)] if codes else [])
+    return " and ".join(parts) or "nothing"
+
+
 def cmd_export(args):
     if args.format == "cxf" and not args.unencrypted:
         raise CliError("CXF files are not encrypted: add --unencrypted if you really want one")
