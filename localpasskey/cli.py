@@ -456,6 +456,7 @@ def cmd_totp_add(args):
         site = totp.site_from_issuer(issuer)
         if sys.stdin.isatty():
             site = input(f"Website [{_printable(site)}]: " if site else "Website: ").strip() or site
+    site = totp.normalize_site(site)  # "https://github.com/login" -> "github.com"
     entry = {"site": site, "issuer": issuer, "account": account, "algorithm": parsed["algorithm"],
              "digits": parsed["digits"], "period": parsed["period"]}
     _print_table(("WEBSITE", "ISSUER", "ACCOUNT", "TYPE"),
@@ -493,7 +494,8 @@ def cmd_totp_code(args):
 
 
 def cmd_totp_edit(args):
-    changes = {name: value.strip() for name, value in (("site", args.site), ("issuer", args.issuer),
+    site = None if args.site is None else totp.normalize_site(args.site)
+    changes = {name: value.strip() for name, value in (("site", site), ("issuer", args.issuer),
                                                        ("account", args.account)) if value is not None}
     if not changes:
         raise CliError("say what to change: --site, --issuer or --account")

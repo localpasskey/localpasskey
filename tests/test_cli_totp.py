@@ -131,6 +131,25 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual(self.prompts, [], "no prompt without a terminal")
         self.assertEqual(self.codes()[0].site, "github.com")
 
+    def test_a_website_is_reduced_to_its_host_name(self):
+        code, _, err = self.run_cli("totp", "add", "--account", "a", tty=True, passphrases=[KEY],
+                                    typed=["https://GitHub.com/login", "y"])
+        self.assertEqual(code, 0, err)
+        # Without a terminal nothing is asked: --site, else the issuer's suggestion, else none.
+        code, _, err = self.run_cli("totp", "add", "-y", "--site", " https://Mail.Example/inbox ",
+                                    "--account", "b", stdin=KEY + "\n")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.prompts, [])
+        code, _, err = self.run_cli("totp", "add", "-y", "--account", "c", stdin=KEY + "\n")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.prompts, [])
+        sites = {e.account: e for e in self.codes()}
+        self.assertEqual({account: e.site for account, e in sites.items()},
+                         {"a": "github.com", "b": "mail.example", "c": ""})
+        code, _, err = self.run_cli("totp", "edit", sites["c"].id.hex()[:8], "--site", "HTTPS://GitLab.com/")
+        self.assertEqual(code, 0, err)
+        self.assertEqual({e.account: e.site for e in self.codes()}["c"], "gitlab.com")
+
     def test_add_and_edit_strip_the_labels_they_send(self):
         with patch("localpasskey.cli._ask", wraps=cli._ask) as ask:
             code, out, err = self.run_cli("totp", "add", "-y", "--issuer", " Mail ", "--account", "\tme ",
