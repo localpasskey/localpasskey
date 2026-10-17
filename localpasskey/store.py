@@ -153,15 +153,28 @@ class TotpEntry:
         if deleted is not None and (isinstance(deleted, bool) or not isinstance(deleted, (int, float))):
             # Fail closed: a corrupt timestamp must not turn a trashed code live.
             raise ValueError(f"invalid deleted timestamp {deleted!r}")
+        from . import totp  # not at the top: totp imports ctap2, which imports this module
+
+        algorithm = data.get("algorithm", totp.DEFAULT_ALGORITHM)
+        digits = data.get("digits", totp.DEFAULT_DIGITS)
+        period = data.get("period", totp.DEFAULT_PERIOD)
+        # Fail closed here too: a code computed with a value the daemon never accepts is no code.
+        if algorithm not in totp.ALGORITHMS:
+            raise ValueError(f"invalid algorithm {algorithm!r}")
+        if isinstance(digits, bool) or not isinstance(digits, int) or digits not in totp.DIGITS:
+            raise ValueError(f"invalid digits {digits!r}")
+        if (isinstance(period, bool) or not isinstance(period, int)
+                or not totp.MIN_PERIOD <= period <= totp.MAX_PERIOD):
+            raise ValueError(f"invalid period {period!r}")
         return cls(
             id=b64decode(data["id"]),
             sealed_secret=b64decode(data["secret"]),
             site=str(data.get("site", "")),
             issuer=str(data.get("issuer", "")),
             account=str(data.get("account", "")),
-            algorithm=str(data.get("algorithm", "SHA1")),
-            digits=int(data.get("digits", 6)),
-            period=int(data.get("period", 30)),
+            algorithm=algorithm,
+            digits=digits,
+            period=period,
             created=float(data.get("created", 0.0)),
             deleted=None if deleted is None else float(deleted),
         )

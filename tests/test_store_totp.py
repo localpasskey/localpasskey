@@ -147,10 +147,15 @@ class TotpStoreTests(unittest.TestCase):
     def test_malformed_entries_fail_closed(self):
         good = self.entry().to_json()
         for bad in ({**good, "deleted": "yesterday"}, {**good, "deleted": True}, {"id": good["id"]},
-                    {**good, "digits": "x"}, "not an object"):
+                    {**good, "digits": "x"}, {**good, "period": 0}, {**good, "period": 301},
+                    {**good, "algorithm": "MD5"}, {**good, "digits": True}, {**good, "digits": 7},
+                    {**good, "digits": "6"}, {**good, "period": 30.5}, "not an object"):
             self.write_doc(entries=[bad])
-            with self.assertRaises(StoreError, msg=bad):
+            with self.assertRaisesRegex(StoreError, "malformed authenticator code", msg=bad):
                 self.store.totp_entries(UID, USER)
+        self.write_doc(entries=[{k: v for k, v in good.items() if k not in ("algorithm", "digits", "period")}])
+        [entry] = self.store.totp_entries(UID, USER)
+        self.assertEqual((entry.algorithm, entry.digits, entry.period), ("SHA1", 6, 30))
 
     def test_cap_counts_the_trash(self):
         with patch.object(store_module, "MAX_TOTP_PER_USER", 2):
