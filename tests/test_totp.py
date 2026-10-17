@@ -192,6 +192,14 @@ class SiteTests(unittest.TestCase):
         self.assertEqual(totp.normalize_site("localhost"), "localhost")
         self.assertEqual(totp.normalize_site("https://[::1"), "https://[::1")
         self.assertEqual(totp.normalize_site("bücher.de"), "bücher.de")
+        # Without a scheme, a path, port, query or user name still leaves the host.
+        self.assertEqual(totp.normalize_site("github.com/login"), "github.com")
+        self.assertEqual(totp.normalize_site("www.GitHub.com:443"), "www.github.com")
+        self.assertEqual(totp.normalize_site("me@github.com"), "github.com")
+        self.assertEqual(totp.normalize_site("github.com?x=1"), "github.com")
+        self.assertEqual(totp.normalize_site("www.github.com/"), "www.github.com")
+        self.assertEqual(totp.normalize_site("My Bank/login"), "My Bank/login")
+        self.assertEqual(totp.normalize_site("[::1"), "[::1")
 
 
 if __name__ == "__main__":

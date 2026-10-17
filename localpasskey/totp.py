@@ -160,15 +160,14 @@ def code(
 def normalize_site(text: str) -> str:
     """The host of a typed website: "https://GitHub.com/login" -> "github.com".
 
-    Anything that is not a plain host name comes back stripped but otherwise
-    as typed, for the service to accept or refuse."""
+    Without a scheme too: "github.com/login", "www.github.com:443" and
+    "me@github.com" give their host. Anything that is not a plain host name
+    comes back stripped but otherwise as typed, for the service to accept or refuse."""
     text = text.strip()
-    host = text
-    if "://" in text:
-        try:
-            host = urlsplit(text).hostname or ""
-        except ValueError:
-            host = ""
+    try:
+        host = urlsplit(text if "://" in text else "//" + text).hostname or ""
+    except ValueError:
+        host = ""
     host = host.rstrip(".").lower()
     return host if _HOST.fullmatch(host) else text
 
