@@ -1,6 +1,6 @@
 .TH LOCALPASSKEY 1 "October 2026" "localpasskey 0.3.1" "User Commands"
 .SH NAME
-localpasskey \- list, restore, delete, export and import the passkeys stored on this computer
+localpasskey \- list, restore, delete, export and import the passkeys and authenticator codes stored on this computer
 .SH SYNOPSIS
 .B localpasskey list
 .RB [ \-\-trash ]
@@ -36,6 +36,60 @@ localpasskey \- list, restore, delete, export and import the passkeys stored on 
 .RB [ \-\-user
 .IR user ]
 .br
+.B localpasskey totp list
+.RB [ \-\-trash ]
+.RB [ \-\-json ]
+.RB [ \-\-user
+.IR user ]
+.br
+.B localpasskey totp add
+.RB [ \-\-site
+.IR site ]
+.RB [ \-\-issuer
+.IR text ]
+.RB [ \-\-account
+.IR text ]
+.RB [ \-\-user
+.IR user ]
+.RB [ \-y ]
+.br
+.B localpasskey totp code
+.I query
+.RB [ \-\-user
+.IR user ]
+.br
+.B localpasskey totp edit
+.I ID
+.RB [ \-\-site
+.IR site ]
+.RB [ \-\-issuer
+.IR text ]
+.RB [ \-\-account
+.IR text ]
+.RB [ \-\-user
+.IR user ]
+.br
+.B localpasskey totp
+.BR delete | restore
+.RI [ ID ...]
+.RB [ \-\-site
+.IR site ]
+.RB [ \-\-all ]
+.RB [ \-\-user
+.IR user ]
+.RB [ \-y ]
+.br
+.B localpasskey totp purge
+.I ID
+.RB [ \-\-user
+.IR user ]
+.br
+.B localpasskey totp settings
+.RB [ \-\-require\-password
+.BR yes | no ]
+.RB [ \-\-user
+.IR user ]
+.br
 .B localpasskey export
 .I file
 .RI [ ID ...]
@@ -44,6 +98,7 @@ localpasskey \- list, restore, delete, export and import the passkeys stored on 
 .RB [ \-\-format
 .BR localpasskey | cxf ]
 .RB [ \-\-unencrypted ]
+.RB [ \-\-no\-codes ]
 .RB [ \-\-force ]
 .RB [ \-\-user
 .IR user ]
@@ -79,6 +134,14 @@ A PIN protects the passkeys against a browser listing or deleting them.
 Browsers ask for it in their security-key settings, and
 .B localpasskey pin
 sets, shows or removes it.
+.PP
+.B localpasskey totp
+manages authenticator codes: the time-based one-time codes (TOTP, RFC 6238)
+of authenticator apps, for sites that ask for one as a second step. Their
+setup keys are kept by the service beside your passkeys, with the same
+protection, and leave it only in an export you approve. Codes complement
+passkeys and do not replace them: a fake site can ask for a code and pass it
+on, while a passkey only ever signs in to the site it belongs to.
 .SH COMMANDS
 .TP
 .B list
@@ -142,6 +205,85 @@ reads the new PIN twice without echoing it;
 forgets it. Only a hash of the PIN is stored, and the PIN on its own never
 deletes a passkey: passkey changes always ask for your password.
 .TP
+.B totp list
+Show your authenticator codes, but not the codes themselves: an ID, the
+site, the issuer, the account, the type (6 or 8 digits, the period, and the
+algorithm when it is not SHA1), and when the code was added.
+.B \-\-json
+prints all details.
+.B \-\-trash
+shows the trash instead, with the time each code was moved there.
+.TP
+.B totp add
+Save an authenticator code. Paste the
+.B otpauth://totp/
+link or the setup key (Base32; spaces, dashes and lower case are fine) that
+the site shows next to its QR code. The command reads it from the terminal
+without echoing it, or as one line from standard input, never from the
+command line. It fills in the issuer and account from a link, asks for the
+website (suggesting one when the issuer looks like a host name) unless
+.B \-\-site
+is given, shows what it will save but never the setup key, and asks for
+confirmation (skip with
+.BR \-y )
+before polkit asks for your password. Counter-based (HOTP) codes and
+.B otpauth\-migration
+links are refused. The website is what
+.B \-\-site
+selectors match; it may be left empty.
+.TP
+.BI "totp code " query
+Print the current code of one authenticator code on standard output, and how
+many more seconds it is valid on standard error.
+.I query
+is an ID prefix of at least four characters or part of the site, issuer or
+account (case does not matter); if it matches several codes, the command
+lists them and stops. When showing codes needs your password, polkit asks
+for it each time.
+.TP
+.BI "totp edit " ID
+Change the
+.BR \-\-site ,
+.B \-\-issuer
+or
+.B \-\-account
+of a code. The setup key and the code type cannot be changed; add the code
+again instead.
+.TP
+.BR "totp delete" ", " "totp restore" ", " "totp purge"
+Move codes to the trash, bring them back, or delete one from the trash for
+good, with the same selectors and confirmations as
+.BR delete ,
+.B restore
+and
+.BR purge .
+The code of an entry in the trash is never shown. Restoring has no conflict rules.
+.B purge
+asks you to type the site, or the issuer when the site is empty, and always
+asks for your password. Without the code you may lose access to the account,
+so turn off two-step verification on the site, or move it elsewhere, first.
+Each user can keep 4096 authenticator codes besides the 4096 passkeys; codes
+in the trash count until purged.
+.TP
+.B totp settings
+Show whether your password is needed before codes are shown (yes by
+default).
+.B \-\-require\-password no
+turns that off, which polkit asks your password for;
+.B \-\-require\-password yes
+turns it back on without asking.
+.IP
+While the setting is on, a program such as
+.BR localpasskey-gui (1)
+unlocks the codes once and may then show them until it has asked for no code
+for 5 minutes, locks them, or exits, or until the service restarts. While a
+program has them unlocked, adding, editing, deleting and restoring codes
+does not ask again; permanent deletion always does. Each
+.B totp code
+command asks again. Root can read any user's codes with
+.B \-\-user
+without a dialog.
+.TP
 .B export
 Write passkeys to
 .IR file :
@@ -170,6 +312,22 @@ password managers do not import such files directly). CXF is not encrypted, so i
 and the command warns: anyone who can read the file has the passkeys.
 CXF cannot say that a passkey is a security key (non-discoverable) or carry
 its credProtect level; such passkeys come back as ordinary passkeys.
+.IP
+A LocalPasskey backup also holds your authenticator codes, setup keys
+included, unless
+.B \-\-no\-codes
+is given: all live codes by default or with
+.BR \-\-all ,
+those for the site with
+.BR \-\-site ,
+and none when passkeys are chosen by
+.IR ID .
+The command lists them with the passkeys, and one password dialog allows
+both. A backup with codes is format version 2, which LocalPasskey 0.3.1 and
+earlier refuse to open rather than drop the codes; a backup without codes is
+unchanged. CXF files never hold codes, and with
+.B \-\-format cxf
+the command says so on standard error when you have any.
 .TP
 .B import
 Add the passkeys in
@@ -187,6 +345,12 @@ account on the same site exists, when it appears twice in the file, when it
 cannot be read, or when the store is full. The file is read and decrypted by
 this command as you; the service only receives the passkeys, checks them,
 and seals them for your user on this computer.
+.IP
+Authenticator codes in a LocalPasskey backup are imported too and listed in
+a table of their own. A code is skipped when it is already on this computer
+(the same code, or the same setup key for the same site and account), when
+it is in the trash here, when it appears twice in the file, when it cannot
+be read, or when the store is full.
 .IP
 LocalPasskey always reports a signature counter of 0. A site that has seen a
 non-zero counter for an imported passkey may refuse it.
@@ -216,6 +380,15 @@ $ localpasskey import passkeys.lpkbackup
 Passphrase this file was exported with:
 Import these 2 passkeys? [y/N] y
 Imported 2 passkeys.
+$ localpasskey totp add --site github.com
+otpauth:// link or setup key:
+Save this authenticator code? [y/N] y
+$ localpasskey totp list
+ID        SITE        ISSUER  ACCOUNT  TYPE             CREATED
+9c4e07d2  github.com  GitHub  octocat  6 digits \[u00B7] 30 s  2026-10-09 18:02
+$ localpasskey totp code github
+492039
+valid for 17 more seconds
 .fi
 .SH SEE ALSO
 .BR localpasskeyd (8),
