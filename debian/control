@@ -57,4 +57,5 @@ Description: passkeys stored on this computer, like Windows Hello
  accepts, such as a fingerprint). Any number of accounts per site is
  supported; browsers show an account chooser. The localpasskey command
  and the LocalPasskey window (Qt, QDarkStyle theme) list, back up and
- delete stored passkeys.
+ delete stored passkeys. They also keep authenticator codes (TOTP) for
+ sites that ask for one, stored and protected the same way.
