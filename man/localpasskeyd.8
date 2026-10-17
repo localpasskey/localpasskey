@@ -119,7 +119,8 @@ number of attempts left. Present only while a PIN is set.
 That user's authenticator codes, including those in the trash, and whether
 showing them needs the password. Readable by root only; setup keys are
 encrypted with the same master key and bound to the uid. Present once the
-user adds a code. Older versions of the daemon ignore this file.
+user adds or imports a code, or changes that setting. Older versions of the
+daemon ignore this file.
 .TP
 .I /usr/share/polkit-1/actions/org.localpasskey.policy
 polkit actions
