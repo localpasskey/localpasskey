@@ -128,8 +128,8 @@ def code_record(entry, secret: bytes) -> dict:
 
 
 def _code_label(entry) -> str:
-    """What a dialog calls a code; its site is what the user was asked to confirm."""
-    return _label(entry.site or entry.issuer or entry.account) or "an account"
+    """What a dialog calls a code: its site, else its issuer; never the account name."""
+    return _label(entry.site or entry.issuer) or "an account"
 
 
 def _counts(passkeys: int, codes: int) -> str:

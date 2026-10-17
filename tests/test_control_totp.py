@@ -200,6 +200,16 @@ class TotpControlTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "not shown"):
             self.handle({"action": "code", "ids": [added["id"]], "ask": True})
 
+    def test_dialogs_and_notifications_never_name_the_account(self):
+        self.server._unlocks[self.server._unlock_key(os.getpid(), self.uid)] = time.monotonic() + 60
+        added = self.handle({"action": "add", "entry": self.entry(site="", issuer="", account="octocat")})["added"]
+        self.server._unlocks.clear()
+        self.handle({"action": "code", "ids": [added["id"]], "ask": True})
+        self.assertEqual(self.polkit.checks[-1][2], "Show the authenticator code for an account?")
+        self.assertEqual(self.notifier.notes[-1][1],
+                         "The authenticator code for an account was added to this computer.")
+        self.assertNotIn("octocat", repr(self.polkit.checks + self.notifier.notes))
+
     def test_code_ignores_the_trash_and_validates_its_request(self):
         added = self.add()
         self.unlock()
