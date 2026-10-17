@@ -303,7 +303,10 @@ localpasskey totp settings                # is a password needed to show codes?
 ```
 
 `totp add` reads the link or setup key without echoing it, never from the
-command line, shows what it will save and asks for your password. `totp code`
+command line. Without `--site` it asks for the website when run in a
+terminal, suggesting the issuer when that is a host name; a full address
+such as `https://github.com/login` is saved as `github.com`. It then shows
+what it will save and asks for your password. `totp code`
 prints only the code, and how long it stays valid on stderr. Counter-based
 (HOTP) codes, Steam codes and Google Authenticator's `otpauth-migration`
 export links are not supported.
