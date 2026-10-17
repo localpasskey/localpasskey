@@ -112,11 +112,24 @@ def cmd_list(args):
     return 0
 
 
+def _open_tty():
+    """The controlling terminal, or None without one (cron, a detached session)."""
+    try:
+        return open("/dev/tty", "r+", encoding="utf-8")
+    except OSError:
+        return None
+
+
 def _start_tty_agent():
     """Let polkit ask for the password in this terminal when no graphical
-    authentication agent is available (over SSH, for example)."""
-    if os.geteuid() == 0 or not sys.stdin.isatty() or not shutil.which("pkttyagent"):
+    authentication agent is available (over SSH, for example). pkttyagent
+    opens the terminal itself, so stdin may be a pipe."""
+    if os.geteuid() == 0 or not shutil.which("pkttyagent"):
         return None
+    tty = _open_tty()
+    if tty is None:
+        return None
+    tty.close()
     notify_read, notify_write = os.pipe()
     agent = subprocess.Popen(
         ["pkttyagent", "--notify-fd", str(notify_write), "--fallback"], pass_fds=(notify_write,)
@@ -459,6 +472,18 @@ def cmd_totp_list(args):
     return 0
 
 
+def _confirm(prompt, tty):
+    """input(), or the same on ``tty`` when there is one."""
+    if tty is None:
+        return input(prompt)
+    tty.write(prompt)
+    tty.flush()
+    answer = tty.readline()
+    if not answer:
+        raise EOFError
+    return answer
+
+
 def _read_setup_key():
     """The link or setup key, from the terminal without echo or as one line of stdin."""
     if sys.stdin.isatty():
@@ -467,6 +492,18 @@ def _read_setup_key():
 
 
 def cmd_totp_add(args):
+    # Stdin holds the setup key when it is no terminal, so the confirmation comes from /dev/tty.
+    tty = None if args.yes or sys.stdin.isatty() else _open_tty()
+    if tty is None and not args.yes and not sys.stdin.isatty():
+        raise CliError("the setup key came from standard input: add -y to save it without asking")
+    try:
+        return _totp_add(args, tty)
+    finally:
+        if tty is not None:
+            tty.close()
+
+
+def _totp_add(args, tty):
     try:
         parsed = totp.parse(_read_setup_key())
     except totp.OtpError as e:
@@ -483,7 +520,7 @@ def cmd_totp_add(args):
              "digits": parsed["digits"], "period": parsed["period"]}
     _print_table(("WEBSITE", "ISSUER", "ACCOUNT", "TYPE"),
                  [(site or "-", issuer or "-", account or "-", _code_type(entry))])
-    if not args.yes and input("Save this authenticator code? [y/N] ").strip().lower() not in ("y", "yes"):
+    if not args.yes and _confirm("Save this authenticator code? [y/N] ", tty).strip().lower() not in ("y", "yes"):
         print("Nothing added.")
         return 1
     entry["secret"] = totp.encode_secret(parsed["secret"])

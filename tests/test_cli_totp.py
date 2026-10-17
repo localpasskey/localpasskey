@@ -46,6 +46,9 @@ class CliTotpTests(unittest.TestCase):
         agent = patch("localpasskey.cli._start_tty_agent", return_value=None)
         agent.start()
         self.addCleanup(agent.stop)
+        no_tty = patch("localpasskey.cli._open_tty", return_value=None)  # never the real terminal
+        no_tty.start()
+        self.addCleanup(no_tty.stop)
         self.prompts = []
 
     def run_cli(self, *args, stdin="", typed=(), passphrases=(), tty=False):
@@ -131,6 +134,29 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(self.prompts, [], "no prompt without a terminal")
         self.assertEqual(self.codes()[0].site, "github.com")
+
+    def test_add_from_a_pipe_confirms_on_the_terminal_or_needs_yes(self):
+        with patch("localpasskey.cli.request", wraps=cli.request) as sent:
+            code, _, err = self.run_cli("totp", "add", "--site", "github.com", stdin=LINK + "\ny\n")
+        self.assertEqual(code, 1)
+        self.assertIn("the setup key came from standard input: add -y to save it without asking", err)
+        self.assertEqual((sent.call_count, self.codes()), (0, []))
+
+        class Answering(io.StringIO):
+            def readline(self, *_):
+                return "y\n"
+
+            def close(self):
+                self.closed_by_cli = True
+
+        terminal = Answering()
+        with patch("localpasskey.cli._open_tty", return_value=terminal):
+            code, out, err = self.run_cli("totp", "add", "--site", "github.com", stdin=LINK + "\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("Saved the authenticator code for github.com.", out)
+        self.assertEqual(terminal.getvalue(), "Save this authenticator code? [y/N] ")
+        self.assertTrue(terminal.closed_by_cli)
+        self.assertEqual(len(self.codes()), 1)
 
     def test_a_website_is_reduced_to_its_host_name(self):
         code, _, err = self.run_cli("totp", "add", "--account", "a", tty=True, passphrases=[KEY],
@@ -545,6 +571,32 @@ class CliTotpTests(unittest.TestCase):
             self.assertTrue(text.replace("\n", "").isprintable(), repr(text))
 
 
+class TtyAgentTests(unittest.TestCase):
+    def start(self, uid=1000, tty=True, pkttyagent="/usr/bin/pkttyagent"):
+        with (
+            patch("localpasskey.cli.os.geteuid", return_value=uid),
+            patch("localpasskey.cli.shutil.which", return_value=pkttyagent),
+            patch("localpasskey.cli._open_tty", return_value=io.StringIO() if tty else None),
+            patch("sys.stdin", io.StringIO(LINK + "\n")),  # the setup key piped in
+            patch("localpasskey.cli.subprocess.Popen") as popen,
+        ):
+            agent = cli._start_tty_agent()
+        return agent, popen
+
+    def test_starts_with_a_terminal_even_when_stdin_is_a_pipe(self):
+        agent, popen = self.start()
+        self.assertIs(agent, popen.return_value)
+        self.assertEqual(popen.call_args.args[0][0], "pkttyagent")
+        self.assertIn("--fallback", popen.call_args.args[0])
+
+    def test_never_without_a_terminal_as_root_or_without_pkttyagent(self):
+        for kwargs in ({"tty": False}, {"uid": 0}, {"pkttyagent": None}):
+            with self.subTest(**kwargs):
+                agent, popen = self.start(**kwargs)
+                self.assertIsNone(agent)
+                popen.assert_not_called()
+
+
 class CliTotpProcessTests(unittest.TestCase):
     def test_add_from_a_pipe_and_list(self):
         fixture = test_control.ControlTests()
@@ -557,8 +609,12 @@ class CliTotpProcessTests(unittest.TestCase):
                 [sys.executable, str(Path(__file__).resolve().parents[1] / "bin/localpasskey"),
                  "--socket", fixture.server.path, "totp", *args],
                 input=input, capture_output=True, text=True, timeout=15,
+                start_new_session=True,  # no controlling terminal, as under cron
             )
         result = run("add", input=LINK + "\ny\n")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("add -y to save it without asking", result.stderr)
+        result = run("add", "-y", input=LINK + "\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Saved the authenticator code for github.com.", result.stdout)
         self.assertNotIn(KEY, result.stdout + result.stderr)
