@@ -298,7 +298,13 @@ def cmd_export(args):
         args.all = True
     selector = _selector(args, "export")
     with_codes = not args.no_codes and args.format != "cxf"
-    plan = request({**selector, "dry_run": True, **({"codes": True} if with_codes else {})}, args.socket)
+    try:
+        plan = request({**selector, "dry_run": True, **({"codes": True} if with_codes else {})}, args.socket)
+    except ServiceError as e:
+        # Only the codes can be left out; a damaged totp.json should not block a passkey export.
+        if with_codes and ("totp.json" in str(e) or "authenticator code" in str(e)):
+            raise CliError(f"{e} (use --no-codes to export only passkeys)") from None
+        raise
     chosen, chosen_codes = plan["exported"], plan.get("exported_codes", [])
     if chosen or not chosen_codes:
         _print_credentials(chosen)

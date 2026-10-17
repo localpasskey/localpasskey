@@ -334,6 +334,22 @@ class CliTotpTests(unittest.TestCase):
             self.assertEqual(transfer.load(stream.read(), lambda: self.PASSPHRASE).codes[0]["id"],
                              b64encode(github.id))
 
+    def test_export_suggests_no_codes_when_the_codes_fail(self):
+        path = os.path.join(self.tmp, "keys.lpkbackup")
+        code, _, err = self.run_cli("export", path, "--site", "nowhere.example")
+        self.assertEqual(code, 1)
+        self.assertIn("nothing to export", err)
+        self.assertNotIn("--no-codes", err, "only a failure of the codes gets the hint")
+        self.fixture.store._totp_path(self.fixture.uid).write_text("{not json")
+        code, _, err = self.run_cli("export", path)
+        self.assertEqual(code, 1)
+        self.assertIn("totp.json is not valid JSON", err)
+        self.assertTrue(err.endswith(" (use --no-codes to export only passkeys)\n"), err)
+        self.assertEqual((self.checks(), os.path.exists(path)), ([], False))
+        code, out, err = self.run_cli("export", path, "--no-codes", passphrases=[self.PASSPHRASE] * 2)
+        self.assertEqual(code, 0, err)
+        self.assertIn("Exported 3 passkeys to", out)
+
     def test_export_of_codes_only(self):
         ids = [c.id for c in self.fixture.creds]
         self.fixture.store.remove(self.fixture.uid, self.fixture.name, ids)
