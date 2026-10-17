@@ -131,6 +131,23 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual(self.prompts, [], "no prompt without a terminal")
         self.assertEqual(self.codes()[0].site, "github.com")
 
+    def test_add_and_edit_strip_the_labels_they_send(self):
+        with patch("localpasskey.cli._ask", wraps=cli._ask) as ask:
+            code, out, err = self.run_cli("totp", "add", "-y", "--issuer", " Mail ", "--account", "\tme ",
+                                          stdin=KEY + "\n")
+        self.assertEqual(code, 0, err)
+        sent = ask.call_args.args[0]["entry"]
+        self.assertEqual((sent["issuer"], sent["account"]), ("Mail", "me"))
+        self.assertIn("Saved the authenticator code for Mail.", out)
+        [entry] = self.codes()
+        with patch("localpasskey.cli._ask", wraps=cli._ask) as ask:
+            code, out, err = self.run_cli("totp", "edit", entry.id.hex()[:8], "--issuer", " Post ",
+                                          "--account", "you\n")
+        self.assertEqual(code, 0, err)
+        sent = ask.call_args.args[0]
+        self.assertEqual((sent["issuer"], sent["account"]), ("Post", "you"))
+        self.assertIn("Changed the authenticator code for Post.", out)
+
     def test_code_prints_only_the_code(self):
         github, _ = self.store_code(), self.store_code(site="gitlab.com", issuer="GitLab", account="tanuki")
         for query in ("GITHUB", github.id.hex()[:6], "octo"):

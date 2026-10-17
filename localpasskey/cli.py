@@ -449,8 +449,8 @@ def cmd_totp_add(args):
         parsed = totp.parse(_read_setup_key())
     except totp.OtpError as e:
         raise CliError(str(e)) from None
-    issuer = parsed["issuer"] if args.issuer is None else args.issuer
-    account = parsed["account"] if args.account is None else args.account
+    issuer = parsed["issuer"] if args.issuer is None else args.issuer.strip()
+    account = parsed["account"] if args.account is None else args.account.strip()
     site = args.site
     if site is None:
         site = totp.site_from_issuer(issuer)
@@ -493,8 +493,8 @@ def cmd_totp_code(args):
 
 
 def cmd_totp_edit(args):
-    changes = {name: value for name, value in (("site", args.site), ("issuer", args.issuer),
-                                               ("account", args.account)) if value is not None}
+    changes = {name: value.strip() for name, value in (("site", args.site), ("issuer", args.issuer),
+                                                       ("account", args.account)) if value is not None}
     if not changes:
         raise CliError("say what to change: --site, --issuer or --account")
     updated = _ask({**_payload(args, "update", codes=True), "id": args.id, **changes}, args)["updated"]
