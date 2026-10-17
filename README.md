@@ -332,9 +332,11 @@ permanent deletion always does. `totp code` keeps no unlock: with the
 setting on, it asks every time.
 
 Deleted codes go to their own trash, like passkeys: `totp restore` brings them
-back, nothing expires, and `totp purge` deletes one for good. Each user can
-keep 4096 authenticator codes, apart from the 4096 passkeys; codes in the
-trash count until purged.
+back, nothing expires, and `totp purge` deletes one for good. Before it does,
+it asks you to type the code's site, its issuer when it has no site, or the
+word `delete` when it has neither; *Delete Permanently…* in the window asks
+the same. Each user can keep 4096 authenticator codes, apart from the 4096
+passkeys; codes in the trash count until purged.
 
 Backups made with `localpasskey export` or the window's export include your
 authenticator codes, setup keys and all, unless you pass `--no-codes` or clear
