@@ -917,6 +917,7 @@ class Window(QMainWindow):
         self._unlocked = False  # the service shows this window the codes without asking
         self._unlocking = False
         self._fetching = False
+        self._fetch_again = False
         self._values = {}  # code ID -> (code, monotonic time it runs out, period)
         self._code_count = None  # live codes, for the export checkbox
         self._copied = None  # the code Copy Code put on the clipboard
@@ -1146,8 +1147,10 @@ class Window(QMainWindow):
 
     def _fetch_codes(self):
         """Ask for every live code, if the codes are showing and someone can see them."""
-        if (self._fetching or not self._unlocked or not self._codes_tab or self._trash
-                or not self._creds or not self.isActiveWindow()):
+        if self._fetching:
+            self._fetch_again = True  # the running request may predate a new code
+            return
+        if not self._unlocked or not self._codes_tab or self._trash or not self._creds or not self.isActiveWindow():
             return
         self._fetching = True
         self.tasks.run(lambda: request({"command": "totp", "action": "code", "all": True})["codes"],
@@ -1155,6 +1158,10 @@ class Window(QMainWindow):
 
     def _on_codes(self, codes, error):
         self._fetching = False
+        if self._fetch_again:
+            self._fetch_again = False
+            self._fetch_codes()
+            return
         if not self._unlocked or not self._codes_tab or self._trash or not self.isActiveWindow():
             return  # locked, left or hidden while asking: show nothing
         if error is not None:
