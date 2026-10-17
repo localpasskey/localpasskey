@@ -326,8 +326,9 @@ website, issuer and account, and *Move to Trash…*, *Restore* and
 *Delete Permanently…* work as they do for passkeys. Codes are hidden while
 the window is in the background. The tab locks again when you leave it or
 close the window. It also locks once the window has asked for no code for 5
-minutes, for example while in the background, and when the service restarts;
-the tab then shows *Unlock* again.
+minutes, for example while in the background, and within a few seconds of
+the service dropping the unlock (when it restarts, for example), also while
+the trash is shown; the tab then shows *Unlock* again.
 
 Showing codes is protected by your password by default. *File → Settings…*
 (or `localpasskey totp settings --require-password no`) turns that off;
