@@ -451,7 +451,9 @@ class ControlServer:
         for field, kind in (("codes", bool), ("code_ids", list)):
             if field in request and not isinstance(request[field], kind):
                 raise ControlError(f"invalid {field} selector")
-        live_codes = self.store.totp_entries(target_uid, username)
+        with_codes = bool(request.get("codes") or request.get("code_ids"))
+        # A passkey-only export never reads totp.json, so a damaged one cannot break it.
+        live_codes = self.store.totp_entries(target_uid, username) if with_codes else []
         if request.get("code_ids"):
             # The confirmed request of a client: exactly the codes it showed.
             chosen_codes = self._select({"ids": request["code_ids"]}, live_codes, *CODE_WORDS)
@@ -461,7 +463,6 @@ class ControlServer:
             chosen_codes = [e for e in live_codes if e.site == request["site"]]
         else:
             chosen_codes = []
-        with_codes = bool(request.get("codes") or request.get("code_ids"))
         if with_codes and not any(request.get(field) for field in ("all", "site", "ids")):
             chosen = []  # codes only
         else:
@@ -481,8 +482,10 @@ class ControlServer:
         live = {c.id: c for c in self.store.credentials(target_uid, username)}
         exported = [live[c.id] for c in chosen if c.id in live]
         records = [record(c, self.store.unseal(target_uid, c)) for c in exported]
-        live_codes = {e.id: e for e in self.store.totp_entries(target_uid, username)}
-        exported_codes = [live_codes[e.id] for e in chosen_codes if e.id in live_codes]
+        exported_codes = []
+        if chosen_codes:
+            live_codes = {e.id: e for e in self.store.totp_entries(target_uid, username)}
+            exported_codes = [live_codes[e.id] for e in chosen_codes if e.id in live_codes]
         codes = [code_record(e, self.store.totp_unseal(target_uid, e)) for e in exported_codes]
         log.info("Exported %d passkey(s) and %d authenticator code(s) of uid %d at the request of uid %d",
                  len(exported), len(exported_codes), target_uid, uid)
@@ -510,13 +513,17 @@ class ControlServer:
             creds = [_parse_record(i, data, self.store, target_uid) for i, data in enumerate(records)]
             entries = [_parse_totp(data, self.store, target_uid, i) for i, data in enumerate(code_records)]
         imported, skipped = self.store.import_credentials(target_uid, username, creds, dry_run=True)
-        imported_codes, skipped_codes = self.store.totp_import(target_uid, username, entries, dry_run=True)
+        # Like export, an import without codes leaves totp.json alone.
+        imported_codes, skipped_codes = [], []
+        if entries:
+            imported_codes, skipped_codes = self.store.totp_import(target_uid, username, entries, dry_run=True)
         if (imported or imported_codes) and not request.get("dry_run"):
             self._approve(pid, uid, f"Import {_counts(len(imported), len(imported_codes))} into this computer?",
                           "not imported")
             # The conflict rules are applied again: the store may have changed.
             imported, skipped = self.store.import_credentials(target_uid, username, creds)
-            imported_codes, skipped_codes = self.store.totp_import(target_uid, username, entries)
+            if entries:
+                imported_codes, skipped_codes = self.store.totp_import(target_uid, username, entries)
             log.info("Imported %d passkey(s) and %d authenticator code(s) into uid %d at the request of "
                      "uid %d (%d and %d skipped)", len(imported), len(imported_codes), target_uid, uid,
                      len(skipped), len(skipped_codes))

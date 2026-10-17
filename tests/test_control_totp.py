@@ -14,7 +14,7 @@ from localpasskey import cose, totp
 from localpasskey.control import UNLOCK_IDLE, ControlError, ControlServer
 from localpasskey.ctap2 import Verdict
 from localpasskey.polkit import ACTION_AUTHENTICATE, ACTION_EXPORT, ACTION_MANAGE, ACTION_TOTP
-from localpasskey.store import Credential, CredentialStore, b64encode
+from localpasskey.store import Credential, CredentialStore, StoreError, b64encode
 from tests.test_control import FakeNotifier, FakePolkit
 
 SECRET = bytes(range(1, 21))  # RFC 6238's SHA1 test key would also be its own oracle
@@ -552,6 +552,24 @@ class TotpControlTests(unittest.TestCase):
         reply = self.raw({"command": "import", "credentials": [dict(passkey, id=b64encode(os.urandom(32)), user_id="dw")]})
         self.assertEqual(self.polkit.checks[-1][2], "Import 1 passkey into this computer?")
         self.assertEqual((reply["imported_codes"], reply["skipped_codes"]), ([], []))
+
+    def test_a_damaged_totp_file_leaves_passkey_export_and_import_alone(self):
+        self.add_passkey()
+        self.store._totp_path(self.uid).write_text("{not json")
+        reply = self.raw({"command": "export", "all": True})
+        self.assertEqual((len(reply["exported"]), reply["exported_codes"], reply["codes"]), (1, [], []))
+        [record] = reply["credentials"]
+        reply = self.raw({"command": "import", "credentials": [dict(record, id=b64encode(os.urandom(32)),
+                                                                     user_id="dw")]})
+        self.assertEqual((len(reply["imported"]), reply["imported_codes"]), (1, []))
+        reply = self.raw({"command": "import", "credentials": [], "codes": [], "dry_run": True})
+        self.assertEqual(reply["imported_codes"], [])
+        # Asking for codes still fails loudly.
+        for request in ({"command": "export", "all": True, "codes": True},
+                        {"command": "export", "code_ids": ["abcd"]},
+                        {"command": "import", "credentials": [], "codes": [self.code_record()]}):
+            with self.subTest(request=request), self.assertRaises(StoreError):
+                self.raw(request)
 
     def test_import_validates_code_records_strictly(self):
         cases = {
