@@ -312,8 +312,9 @@ In the window, the **Authenticator Codes** tab next to *Passkeys* lists your
 codes by website and account. Opening the tab asks for your password once;
 then the current codes are shown with a countdown and refresh by themselves.
 *Code → Add Code…* (Ctrl+N) takes the pasted link or setup key and checks it
-as you type, *Copy Code* (Ctrl+C) copies the current code and clears the
-clipboard 30 seconds later, and *Edit…*, *Move to Trash…*, *Restore* and
+as you type. *Copy Code* (Ctrl+C) copies the current code; the clipboard is
+cleared after 30 seconds if it still holds the code. *Edit…*,
+*Move to Trash…*, *Restore* and
 *Delete Permanently…* work as they do for passkeys. Codes are hidden while
 the window is in the background. The tab locks again when you leave it or
 close the window. It also locks once the window has asked for no code for 5
