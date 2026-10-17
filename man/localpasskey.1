@@ -125,8 +125,10 @@ trash until
 .B purge
 removes one for good; nothing expires on its own.
 Each user can keep 4096 passkeys; passkeys in the trash count until purged.
-Every command that changes something asks for your password through polkit, and over SSH
-uses
+Every command that changes something asks for your password through polkit
+(except turning the authenticator code password back on, see
+.BR "totp settings" ),
+and over SSH uses
 .BR pkttyagent (1)
 to ask in the terminal.
 .PP
