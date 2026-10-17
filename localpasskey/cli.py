@@ -455,7 +455,7 @@ def cmd_totp_add(args):
     if site is None:
         site = totp.site_from_issuer(issuer)
         if sys.stdin.isatty():
-            site = input(f"Website [{_printable(site)}]: ").strip() or site
+            site = input(f"Website [{_printable(site)}]: " if site else "Website: ").strip() or site
     entry = {"site": site, "issuer": issuer, "account": account, "algorithm": parsed["algorithm"],
              "digits": parsed["digits"], "period": parsed["period"]}
     _print_table(("WEBSITE", "ISSUER", "ACCOUNT", "TYPE"),
