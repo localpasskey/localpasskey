@@ -364,7 +364,9 @@ LocalPasskey always reports a signature counter of 0. A site that has seen a
 non-zero counter for an imported passkey may refuse it.
 .TP
 .B status
-Check that the service is running and show the virtual device node.
+Check that the service is running, and show the virtual device node and how
+many passkeys and authenticator codes are stored for you. If the codes cannot
+be counted, the command says why on standard error and exits with status 1.
 .SH EXAMPLES
 .nf
 $ localpasskey list
