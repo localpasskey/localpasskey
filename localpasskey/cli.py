@@ -298,7 +298,8 @@ def cmd_export(args):
     if not (args.all or args.site or args.ids):
         args.all = True
     selector = _selector(args, "export")
-    with_codes = not args.no_codes and args.format != "cxf"
+    # Passkey IDs select no codes, so they never make the service read totp.json.
+    with_codes = not args.no_codes and args.format != "cxf" and bool(args.all or args.site)
     try:
         plan = request({**selector, "dry_run": True, **({"codes": True} if with_codes else {})}, args.socket)
     except ServiceError as e:

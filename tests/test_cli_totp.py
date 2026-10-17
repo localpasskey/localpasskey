@@ -358,6 +358,17 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Exported 3 passkeys to", out)
 
+    def test_export_by_id_selects_no_codes(self):
+        self.store_code()
+        self.fixture.store._totp_path(self.fixture.uid).write_text("{not json")
+        path = os.path.join(self.tmp, "one.lpkbackup")
+        passkey = self.fixture.creds[0].id.hex()
+        with patch("localpasskey.cli.request", wraps=cli.request) as sent:
+            code, out, err = self.run_cli("export", path, passkey, passphrases=[self.PASSPHRASE] * 2)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("codes", sent.call_args_list[0].args[0])
+        self.assertIn("Exported 1 passkey to", out)
+
     def test_export_of_codes_only(self):
         ids = [c.id for c in self.fixture.creds]
         self.fixture.store.remove(self.fixture.uid, self.fixture.name, ids)
