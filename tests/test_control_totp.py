@@ -460,6 +460,20 @@ class TotpControlTests(unittest.TestCase):
         plan = self.raw({"command": "export", "site": "https://www.github.com", "codes": True, "dry_run": True})
         self.assertEqual([c["id"] for c in plan["exported_codes"]], [added["id"]])
 
+    def test_export_by_site_takes_the_passkeys_and_codes_of_one_host(self):
+        added = self.add(site="github.com")
+        key = cose.generate_private_key(cose.ES256)
+        cred_id = os.urandom(32)
+        self.store.add(self.uid, self.name, Credential(
+            id=cred_id, rp_id="github.com", user_id=b"u", alg=cose.ES256,
+            sealed_key=self.store.seal(self.uid, cred_id, cose.private_key_to_bytes(key)), created=time.time()))
+        # A typed address must not take the codes and silently leave the passkeys out.
+        for site in ("github.com", "GitHub.com", "https://github.com/login"):
+            with self.subTest(site=site):
+                plan = self.raw({"command": "export", "site": site, "codes": True, "dry_run": True})
+                self.assertEqual(([c["id"] for c in plan["exported"]], [c["id"] for c in plan["exported_codes"]]),
+                                 ([cred_id.hex()], [added["id"]]))
+
     # -- delete, restore, purge -------------------------------------------
 
     def test_delete_restore_and_purge(self):
@@ -580,7 +594,7 @@ class TotpControlTests(unittest.TestCase):
         # A blank site normalizes to "" but never selects the codes saved without a website.
         self.add(site="", issuer="NoSite", account="blank")
         for site in ("   ", "\t"):
-            with self.subTest(site=site), self.assertRaisesRegex(ControlError, "nothing to export"):
+            with self.subTest(site=site), self.assertRaisesRegex(ControlError, "choose one selector"):
                 self.raw({"command": "export", "site": site, "codes": True, "dry_run": True})
         with self.assertRaisesRegex(ControlError, "no matching passkeys"):
             self.raw({"command": "export", "all": True, "dry_run": True})

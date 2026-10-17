@@ -456,6 +456,9 @@ class ControlServer:
         for field, kind in (("codes", bool), ("code_ids", list)):
             if field in request and not isinstance(request[field], kind):
                 raise ControlError(f"invalid {field} selector")
+        if isinstance(request.get("site"), str):
+            # One host name for both halves: "GitHub.com" must not take the codes but drop the passkeys.
+            request = {**request, "site": totp.normalize_site(request["site"])}
         # Passkey IDs select no codes, even with "codes" set.
         with_codes = bool(request.get("code_ids")
                           or (request.get("codes") and (request.get("all") or request.get("site"))))
@@ -467,9 +470,7 @@ class ControlServer:
         elif request.get("codes") and request.get("all"):
             chosen_codes = live_codes
         elif request.get("codes") and isinstance(request.get("site"), str) and request["site"]:
-            site = totp.normalize_site(request["site"])
-            # "   " normalizes to "", which must not pick every code saved without a website.
-            chosen_codes = [e for e in live_codes if e.site == site] if site else []
+            chosen_codes = [e for e in live_codes if e.site == request["site"]]
         else:
             chosen_codes = []
         if with_codes and not any(request.get(field) for field in ("all", "site", "ids")):
