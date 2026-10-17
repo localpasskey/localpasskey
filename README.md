@@ -344,7 +344,11 @@ passkeys; codes in the trash count until purged.
 
 Backups made with `localpasskey export` or the window's export include your
 authenticator codes, setup keys and all, unless you pass `--no-codes` or clear
-*Include authenticator codes* in the window; the trash is never exported. A
+the window's *Include authenticator codes* box. Which codes depends on what
+you export: every live code when you export all passkeys (the default, or
+`--all`), only the codes saved for that website with `--site` or the
+window's per-website export, and none when you export passkeys by ID. The
+trash is never exported. A
 backup that holds codes uses backup format version 2, which LocalPasskey 0.3.1
 and earlier refuse to open instead of silently dropping the codes; a backup
 without codes is unchanged. `import` restores codes from such a backup and
