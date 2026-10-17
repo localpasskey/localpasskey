@@ -679,10 +679,12 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(bytes(clipboard.mimeData().data("x-kde-passwordManagerHint")), b"secret")
         self.assertEqual(self.window.statusBar().currentMessage(), "Code copied; the clipboard is cleared in 30 s")
         self.assertTrue(self.window._clipboard_timer.isActive())
-        self.window._expire_copied()  # focus-in before the 30 s are up
-        self.assertEqual(clipboard.text(), code)
-        self.window._copied_until = time.monotonic()
-        self.window._expire_copied()
+        focus_in = QEvent(QEvent.Type.ActivationChange)
+        with patch.object(self.window, "isActiveWindow", return_value=True):
+            self.window.changeEvent(focus_in)  # focus-in before the 30 s are up
+            self.assertEqual(clipboard.text(), code)
+            self.window._copied_until = time.monotonic() - 1  # as after a sleep past the timer
+            self.window.changeEvent(focus_in)
         self.assertEqual(clipboard.text(), "")
         self.window.copy_code()
         clipboard.setText("something else")
