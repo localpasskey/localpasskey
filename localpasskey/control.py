@@ -143,13 +143,14 @@ def _counts(passkeys: int, codes: int) -> str:
 
 
 def _totp_labels(data, fail, default=None):
-    """site, issuer and account of a code; a missing one is ``default``."""
+    """site, issuer and account of a code, without surrounding whitespace; a missing one is ``default``."""
     labels = []
     for name in ("site", "issuer", "account"):
         text = data.get(name, default)
         if text is not None:
             if not isinstance(text, str):
                 fail(f"{name} is missing or not a str")
+            text = text.strip()
             if len(text) > MAX_LABEL_LENGTH:
                 fail(f"{name} is longer than {MAX_LABEL_LENGTH} characters")
             try:

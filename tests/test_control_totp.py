@@ -352,6 +352,20 @@ class TotpControlTests(unittest.TestCase):
         self.assertEqual((added["site"], added["algorithm"], added["digits"], added["period"]),
                          ("", "SHA1", 6, 30))
 
+    def test_labels_lose_surrounding_whitespace(self):
+        self.unlock()
+        added = self.handle({"action": "add", "entry": self.entry(site=" github.com\t", issuer="  GitHub ",
+                                                                   account="\noctocat ")})["added"]
+        self.assertEqual((added["site"], added["issuer"], added["account"]), ("github.com", "GitHub", "octocat"))
+        updated = self.handle({"action": "update", "id": added["id"], "site": "  ", "issuer": " Hub "})["updated"]
+        self.assertEqual((updated["site"], updated["issuer"], updated["account"]), ("", "Hub", "octocat"))
+        reply = self.raw({"command": "import", "credentials": [],
+                          "codes": [self.code_record(site=" imported.example ", issuer=" Imp ", account=" a ")]})
+        self.assertEqual([(c["site"], c["issuer"], c["account"]) for c in reply["imported_codes"]],
+                         [("imported.example", "Imp", "a")])
+        self.assertEqual(sorted((e.site, e.issuer, e.account) for e in self.store.totp_entries(self.uid, self.name)),
+                         [("", "Hub", "octocat"), ("imported.example", "Imp", "a")])
+
     def test_update_changes_labels(self):
         added = self.add()
         self.polkit.verdict = Verdict.DENIED
