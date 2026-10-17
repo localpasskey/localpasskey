@@ -361,6 +361,8 @@ class TotpControlTests(unittest.TestCase):
             "too short": self.entry(secret=totp.encode_secret(b"short")),
             "invalid site": self.entry(site="not a site"),
             "site is missing or not a str": self.entry(site=1),
+            "issuer is missing or not a str": self.entry(issuer=None),
+            "account is missing or not a str": self.entry(account=None),
             "issuer is longer": self.entry(issuer="x" * 256),
             "account is not valid text": self.entry(account="\ud800"),
             "algorithm must be": self.entry(algorithm="MD5"),
@@ -382,7 +384,8 @@ class TotpControlTests(unittest.TestCase):
         added = self.handle({"action": "add", "entry": self.entry(site=" github.com\t", issuer="  GitHub ",
                                                                    account="\noctocat ")})["added"]
         self.assertEqual((added["site"], added["issuer"], added["account"]), ("github.com", "GitHub", "octocat"))
-        updated = self.handle({"action": "update", "id": added["id"], "site": "  ", "issuer": " Hub "})["updated"]
+        updated = self.handle({"action": "update", "id": added["id"], "site": "  ", "issuer": " Hub ",
+                               "account": None})["updated"]  # null: unchanged
         self.assertEqual((updated["site"], updated["issuer"], updated["account"]), ("", "Hub", "octocat"))
         reply = self.raw({"command": "import", "credentials": [],
                           "codes": [self.code_record(site=" imported.example ", issuer=" Imp ", account=" a ")]})
@@ -630,6 +633,7 @@ class TotpControlTests(unittest.TestCase):
             "authenticator code 1: the setup key is too long": {
                 "codes": [self.code_record(secret=totp.encode_secret(os.urandom(129)))]},
             "authenticator code 1: invalid site": {"codes": [self.code_record(site="a b")]},
+            "authenticator code 1: site is missing or not a str": {"codes": [self.code_record(site=None)]},
             "authenticator code 1: the digits must be": {"codes": [self.code_record(digits=10)]},
             "at most 4096 authenticator codes": {"codes": [{}] * 4097},
         }

@@ -169,15 +169,22 @@ class TotpEntry:
         return cls(
             id=b64decode(data["id"]),
             sealed_secret=b64decode(data["secret"]),
-            site=str(data.get("site", "")),
-            issuer=str(data.get("issuer", "")),
-            account=str(data.get("account", "")),
+            site=_text(data, "site"),
+            issuer=_text(data, "issuer"),
+            account=_text(data, "account"),
             algorithm=algorithm,
             digits=digits,
             period=period,
             created=float(data.get("created", 0.0)),
             deleted=None if deleted is None else float(deleted),
         )
+
+
+def _text(data: dict, name: str) -> str:
+    value = data.get(name, "")
+    if not isinstance(value, str):
+        raise ValueError(f"invalid {name} {value!r}")  # fail closed: a null must not become "None"
+    return value
 
 
 def _totp_label(entry_id: bytes) -> bytes:

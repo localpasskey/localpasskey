@@ -147,6 +147,8 @@ def _totp_labels(data, fail, default=None):
     labels = []
     for name in ("site", "issuer", "account"):
         text = data.get(name, default)
+        if text is None and default is not None:
+            fail(f"{name} is missing or not a str")  # an explicit null; only update reads it as "unchanged"
         if text is not None:
             if not isinstance(text, str):
                 fail(f"{name} is missing or not a str")

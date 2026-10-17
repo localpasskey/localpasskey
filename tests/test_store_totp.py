@@ -152,7 +152,8 @@ class TotpStoreTests(unittest.TestCase):
         for bad in ({**good, "deleted": "yesterday"}, {**good, "deleted": True}, {"id": good["id"]},
                     {**good, "digits": "x"}, {**good, "period": 0}, {**good, "period": 301},
                     {**good, "algorithm": "MD5"}, {**good, "digits": True}, {**good, "digits": 7},
-                    {**good, "digits": "6"}, {**good, "period": 30.5}, "not an object"):
+                    {**good, "digits": "6"}, {**good, "period": 30.5}, {**good, "site": None},
+                    {**good, "issuer": 1}, {**good, "account": None}, "not an object"):
             self.write_doc(entries=[bad])
             with self.assertRaisesRegex(StoreError, "malformed authenticator code", msg=bad):
                 self.store.totp_entries(UID, USER)
