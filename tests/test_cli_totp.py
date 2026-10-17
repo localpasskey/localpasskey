@@ -287,6 +287,15 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Passkeys stored for you: 3\nAuthenticator codes stored for you: 1\n", out)
 
+    def test_status_reports_a_failing_code_count_after_the_passkeys(self):
+        self.fixture.store._totp_path(self.fixture.uid).write_text("{not json")
+        code, out, err = self.run_cli("status")
+        self.assertEqual(code, 1)
+        self.assertTrue(out.endswith("Passkeys stored for you: 3\n"), out)
+        self.assertTrue(err.startswith("Authenticator codes: "), err)
+        self.assertIn("totp.json is not valid JSON", err)
+        self.assertEqual(err.count("\n"), 1)
+
     def test_export_includes_codes_unless_told_not_to(self):
         github = self.store_code()
         self.store_code(site="gitlab.com", issuer="GitLab", account="tanuki")

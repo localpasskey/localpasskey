@@ -418,7 +418,11 @@ def cmd_status(args):
     print(f"Virtual security key: {status.get('device') or 'not available'}")
     creds = request({"command": "list"}, args.socket)["credentials"]
     print(f"Passkeys stored for you: {len(creds)}")
-    codes = request({"command": "totp", "action": "status"}, args.socket)["count"]
+    try:
+        codes = request({"command": "totp", "action": "status"}, args.socket)["count"]
+    except ServiceError as e:  # a damaged totp.json, say: the lines above still stand
+        print(f"Authenticator codes: {_printable(str(e))}", file=sys.stderr)
+        return 1
     print(f"Authenticator codes stored for you: {codes}")
     return 0
 
