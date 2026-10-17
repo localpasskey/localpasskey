@@ -46,7 +46,7 @@ from .store import (MAX_CREDENTIALS_PER_USER, MAX_TOTP_PER_USER, Credential, Sto
 
 log = logging.getLogger(__name__)
 
-MAX_REQUEST = 16 * 1024 * 1024  # An import of 4096 RSA passkeys fits in one request.
+MAX_REQUEST = 32 * 1024 * 1024  # An import of 4096 RSA passkeys and 4096 codes fits in one request.
 MIN_ID_PREFIX = 4
 UNLOCK_IDLE = 300.0  # seconds a process may keep showing codes after its last code request
 READERS_PER_UID = 2  # each reader may hold MAX_REQUEST bytes and their parsed JSON
