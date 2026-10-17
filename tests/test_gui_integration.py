@@ -544,6 +544,10 @@ class CodesTabTests(unittest.TestCase):
         self.server.verifier = FakePolkit(Verdict.APPROVED)
         self.uid = os.getuid()
         self.username = pwd.getpwuid(self.uid).pw_name
+        # A fixed clock 10.5 s into a 30 s period: the code the window fetched is the code expected() computes.
+        clock = patch("time.time", return_value=time.time() // 300 * 300 + 10.5)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.window = gui.Window()
         self.window._timer.stop()
         self.window.show()
