@@ -8,6 +8,10 @@ sees a file, a passphrase or a KDF; it validates the records again itself.
 A LocalPasskey backup is a JSON envelope; the records are encrypted with
 AES-256-GCM under a key derived from the passphrase with scrypt, and the
 envelope header is the associated data, so its parameters cannot be swapped.
+A backup that also holds authenticator codes ("totp records", setup keys as
+Base32) is version 2, so a LocalPasskey that only knows version 1 refuses it
+instead of silently dropping the codes. CXF and Bitwarden files carry passkeys
+only.
 """
 
 from __future__ import annotations
@@ -24,12 +28,13 @@ from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from . import cose
+from . import cose, totp
 from .ctap2 import MAX_CREDENTIAL_ID_LENGTH, MAX_LABEL_LENGTH, MAX_USER_ID_LENGTH, valid_rp_id
 from .store import b64decode, b64decode_strict, b64encode
 
 BACKUP_FORMAT = "localpasskey-backup"
 BACKUP_VERSION = 1
+CODES_BACKUP_VERSION = 2  # the payload also holds authenticator codes
 BACKUP_SUFFIX = ".lpkbackup"
 MIN_PASSPHRASE_LENGTH = 8
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**17, 8, 1  # about 0.3 s and 128 MiB
@@ -53,11 +58,15 @@ class _Skip(Exception):
 
 class Records(list):
     """The normalized records of a file, plus the passkeys that were skipped
-    while reading it (``{"credential": describe-like, "reason": str}``)."""
+    while reading it (``{"credential": describe-like, "reason": str}``), and
+    the totp records of a backup in ``codes`` with the skipped ones in
+    ``skipped_codes`` (``{"code": describe_code-like, "reason": str}``)."""
 
     def __init__(self):
         super().__init__()
         self.skipped = []
+        self.codes = []
+        self.skipped_codes = []
 
 
 def passphrase_problem(passphrase: str, repeat: Optional[str] = None) -> Optional[str]:
@@ -93,6 +102,25 @@ def describe(record: dict) -> dict:
         "discoverable": record.get("discoverable", True),
         "created": record.get("created"),
         "last_used": None,
+        "deleted": None,
+    }
+
+
+def describe_code(record: dict) -> dict:
+    """The control socket's ``describe_totp`` view of a totp record."""
+    try:
+        code_id = b64decode(record.get("id") or "").hex()
+    except (ValueError, TypeError):
+        code_id = ""
+    return {
+        "id": code_id,
+        "site": _label(record.get("site")),
+        "issuer": _label(record.get("issuer")),
+        "account": _label(record.get("account")),
+        "algorithm": _label(record.get("algorithm")),
+        "digits": record.get("digits"),
+        "period": record.get("period"),
+        "created": record.get("created"),
         "deleted": None,
     }
 
@@ -179,20 +207,24 @@ def _header_aad(header: dict) -> bytes:
     return json.dumps(header, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
 
-def export_backup(records: List[dict], passphrase: str) -> bytes:
-    """An encrypted LocalPasskey backup of ``records``."""
+def export_backup(records: List[dict], passphrase: str, codes: Optional[List[dict]] = None) -> bytes:
+    """An encrypted LocalPasskey backup of ``records`` and the totp records
+    ``codes``; without codes it is the version 1 format, unchanged."""
     problem = passphrase_problem(passphrase)
     if problem:
         raise TransferError(f"Unsuitable passphrase: {problem}")
     header = {
         "format": BACKUP_FORMAT,
-        "version": BACKUP_VERSION,
+        "version": CODES_BACKUP_VERSION if codes else BACKUP_VERSION,
         "kdf": {"name": "scrypt", "n": SCRYPT_N, "r": SCRYPT_R, "p": SCRYPT_P,
                 "salt": b64encode(os.urandom(_SALT_SIZE))},
         "cipher": "AES-256-GCM",
     }
     nonce = os.urandom(_NONCE_SIZE)
-    plaintext = json.dumps({"credentials": list(records)}).encode()
+    payload = {"credentials": list(records)}
+    if codes:
+        payload["codes"] = list(codes)
+    plaintext = json.dumps(payload).encode()
     ciphertext = AESGCM(_passphrase_key(passphrase, header["kdf"])).encrypt(nonce, plaintext, _header_aad(header))
     doc = dict(header, nonce=b64encode(nonce), ciphertext=b64encode(ciphertext))
     return json.dumps(doc, indent=1).encode() + b"\n"
@@ -203,7 +235,8 @@ def _int(value, low, high) -> bool:
 
 
 def _check_header(doc: dict) -> dict:
-    if doc.get("version") != BACKUP_VERSION:
+    version = doc.get("version")
+    if isinstance(version, bool) or version not in (BACKUP_VERSION, CODES_BACKUP_VERSION):
         raise TransferError("This backup was made by a newer LocalPasskey; update LocalPasskey to read it")
     kdf = doc.get("kdf")
     if doc.get("cipher") != "AES-256-GCM" or not isinstance(kdf, dict) or kdf.get("name") != "scrypt":
@@ -238,12 +271,21 @@ def _load_backup(doc: dict, passphrase_callback: Callable[[], str]) -> Records:
     except InvalidTag:
         raise WrongPassphrase("Wrong passphrase, or the file was modified") from None
     try:
-        creds = json.loads(plaintext)["credentials"]
-        if not isinstance(creds, list):
+        payload = json.loads(plaintext)
+        creds = payload["credentials"]
+        # The version is authenticated, so a version 2 payload must have its codes.
+        codes = payload["codes"] if header["version"] == CODES_BACKUP_VERSION else []
+        if not isinstance(creds, list) or not isinstance(codes, list):
             raise TypeError
     except (ValueError, KeyError, TypeError, RecursionError):
         raise TransferError("This backup is damaged (bad contents)") from None
-    return _collect(creds, _from_backup)
+    result = _collect(creds, _from_backup)
+    for data in codes:
+        try:
+            result.codes.append(_code_from_backup(data))
+        except (_Skip, totp.OtpError) as e:
+            result.skipped_codes.append({"code": describe_code(_peek(data)), "reason": str(e)})
+    return result
 
 
 def _from_backup(data) -> dict:
@@ -261,6 +303,46 @@ def _from_backup(data) -> dict:
         discoverable=data.get("discoverable", True) is not False,
         cred_protect=data.get("cred_protect"), created=data.get("created"),
     )
+
+
+def _code_from_backup(data) -> dict:
+    """A totp record, checked like the daemon will so that one bad code is
+    skipped instead of failing the whole import."""
+    if not isinstance(data, dict):
+        raise _Skip("not an authenticator code")
+    code_id = _binary(data.get("id"), "the ID")
+    if len(code_id) != 16:
+        raise _Skip("the ID must be 16 bytes long")
+    secret = data.get("secret")
+    if not isinstance(secret, str):
+        raise _Skip("the setup key is missing")
+    secret = totp.decode_secret(secret)
+    site = data.get("site", "")
+    if site != "" and not valid_rp_id(site):
+        raise _Skip("invalid site")
+    algorithm = data.get("algorithm", totp.DEFAULT_ALGORITHM)
+    if algorithm not in totp.ALGORITHMS:
+        raise _Skip("the algorithm must be SHA1, SHA256 or SHA512")
+    digits = data.get("digits", totp.DEFAULT_DIGITS)
+    if not (_int(digits, min(totp.DIGITS), max(totp.DIGITS)) and digits in totp.DIGITS):
+        raise _Skip("the number of digits must be 6 or 8")
+    period = data.get("period", totp.DEFAULT_PERIOD)
+    if not _int(period, totp.MIN_PERIOD, totp.MAX_PERIOD):
+        raise _Skip(f"the period must be {totp.MIN_PERIOD} to {totp.MAX_PERIOD} seconds")
+    created = data.get("created")
+    if isinstance(created, bool) or not isinstance(created, (int, float)) or not 0 < created <= time.time():
+        created = 0.0  # the daemon uses the import time
+    return {
+        "id": b64encode(code_id),
+        "site": site,
+        "issuer": _label(data.get("issuer")),
+        "account": _label(data.get("account")),
+        "secret": totp.encode_secret(secret),
+        "algorithm": algorithm,
+        "digits": digits,
+        "period": period,
+        "created": float(created),
+    }
 
 
 # --- FIDO Credential Exchange Format (CXF 1.0) -----------------------------
