@@ -91,6 +91,7 @@ def client_main(stage, root, device_path):
         result = subprocess.run(
             [sys.executable, str(REPO / "bin/localpasskey"), "--socket", str(root / "control.sock"), *args],
             input=stdin, capture_output=True, text=True, timeout=10,
+            start_new_session=True,  # no controlling terminal: nothing may wait on the one this ran from
         )
         assert result.returncode == expected, result.stdout + result.stderr
         assert not leaks((result.stdout + result.stderr).encode()), "the CLI printed the setup key"
@@ -122,9 +123,13 @@ def client_main(stage, root, device_path):
     if stage == "totp":
         assert rfc6238(59) == "46119246", "the test's own RFC 6238 code is wrong"
         link = f"otpauth://totp/Example:alice@example.com?secret={SETUP_KEY}&issuer=Example&algorithm=SHA256&digits=8"
-        # Pasted on stdin, which is no terminal here; never on the command line.
+        # Pasted on stdin, which is no terminal here; never on the command line. With no
+        # terminal to confirm on, the CLI wants -y and sends nothing without it.
+        assert "add -y to save it without asking" in cli(
+            "totp", "add", "--site", "example.com", stdin=f"{link}\n", expected=1)
+        assert json.loads(cli("totp", "list", "--json")) == []
         assert "Saved the authenticator code for example.com." in cli(
-            "totp", "add", "--site", "example.com", stdin=f"{link}\ny\n")
+            "totp", "add", "--site", "example.com", "-y", stdin=f"{link}\n")
         [code] = json.loads(cli("totp", "list", "--json"))
         assert {key: code[key] for key in ("site", "issuer", "account", "algorithm", "digits", "period", "deleted")} == {
             "site": "example.com", "issuer": "Example", "account": "alice@example.com",
