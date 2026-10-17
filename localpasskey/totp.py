@@ -39,7 +39,11 @@ class OtpError(ValueError):
 
 def decode_secret(text: str) -> bytes:
     """A Base32 setup key as users paste it: any case, spaces, dashes, padding."""
-    key = re.sub(r"[\s-]", "", text).upper().rstrip("=")
+    key = re.sub(r"[\s-]", "", text)
+    # Before upper(): "ſ", "ı", "ß" and "ﬀ" upper-case to ASCII letters.
+    if not key.isascii():
+        raise OtpError("this is not a valid setup key")
+    key = key.upper().rstrip("=")
     # 0, 1 and 8 are not remapped: guessing O, I or B could save a wrong key.
     if not _BASE32.fullmatch(key) or len(key) % 8 in (1, 3, 6):
         raise OtpError("this is not a valid setup key")

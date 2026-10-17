@@ -60,6 +60,15 @@ class SecretTests(unittest.TestCase):
             with self.assertRaisesRegex(OtpError, "not a valid setup key"):
                 totp.decode_secret(bad)
 
+    def test_non_ascii_letters_refused(self):
+        # Each upper-cases to ASCII ("S", "I", "SS", "FF") and would decode to another key.
+        for key in ("JBSWY3DPEHPK3PX\u017f", "JBSWY3DPEHPK3PX\u0131",
+                    "JBSWY3DPEHPK3P\u00df", "JBSWY3DPEHPK3P\ufb00"):
+            with self.assertRaisesRegex(OtpError, "not a valid setup key"):
+                totp.decode_secret(key)
+            with self.assertRaisesRegex(OtpError, "not a valid setup key"):
+                totp.parse("otpauth://totp/x?secret=" + key)
+
     def test_impossible_lengths(self):
         for length in (17, 19, 22):  # 1, 3 and 6 mod 8
             with self.assertRaisesRegex(OtpError, "not a valid setup key"):
