@@ -155,6 +155,22 @@ class TotpControlTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ControlError):
                 self.handle({"action": "settings", "require_auth": value})
 
+    def test_settings_off_cannot_race_a_concurrent_switch_on(self):
+        self.store.set_totp_require_auth(self.uid, self.name, False, True)
+        read = self.store.totp_require_auth
+
+        def read_then_switch_on(uid, username):
+            value = read(uid, username)  # this request decides with the old value...
+            self.store.set_totp_require_auth(uid, username, True, False)  # ...then the user turns it on
+            return value
+
+        self.polkit.checks.clear()
+        with patch.object(self.store, "totp_require_auth", read_then_switch_on):
+            with self.assertRaisesRegex(StoreError, "changed meanwhile"):
+                self.handle({"action": "settings", "require_auth": False})
+        self.assertTrue(self.store.totp_require_auth(self.uid, self.name))
+        self.assertEqual(self.polkit.checks, [])
+
     # -- unlock, lock, code -----------------------------------------------
 
     def test_code_without_an_unlock_is_refused(self):

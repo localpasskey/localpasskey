@@ -683,8 +683,12 @@ class CredentialStore:
         with self._lock:
             return self._read_totp(uid, username)[0]
 
-    def set_totp_require_auth(self, uid: int, username: str, value: bool) -> None:
+    def set_totp_require_auth(self, uid: int, username: str, value: bool, expected: bool) -> None:
+        """Store ``value`` if the setting is still ``expected``, the value the caller's decision used."""
         with self._lock:
             require_auth, entries = self._read_totp(uid, username)
+            if require_auth != expected:
+                # Turning it off without a password relies on it having been off already.
+                raise StoreError("the authenticator code setting changed meanwhile; try again")
             if require_auth != bool(value):
                 self._write_totp(uid, username, bool(value), entries)

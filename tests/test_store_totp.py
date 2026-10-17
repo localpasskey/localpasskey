@@ -107,12 +107,15 @@ class TotpStoreTests(unittest.TestCase):
             self.store.totp_update(UID, USER, entry.id, site="x.com")
 
     def test_require_auth(self):
-        self.store.set_totp_require_auth(UID, USER, False)
+        self.store.set_totp_require_auth(UID, USER, False, True)
         self.assertFalse(self.store.totp_require_auth(UID, USER))
         entry = self.entry()
         self.store.totp_add(UID, USER, entry)
         self.assertFalse(self.store.totp_require_auth(UID, USER))  # kept by other writes
-        self.store.set_totp_require_auth(UID, USER, True)
+        with self.assertRaisesRegex(StoreError, "changed meanwhile"):
+            self.store.set_totp_require_auth(UID, USER, True, True)
+        self.assertFalse(self.store.totp_require_auth(UID, USER))
+        self.store.set_totp_require_auth(UID, USER, True, False)
         self.assertTrue(self.store.totp_require_auth(UID, USER))
         self.assertEqual(len(self.store.totp_entries(UID, USER)), 1)
 
@@ -219,7 +222,7 @@ class TotpStoreTests(unittest.TestCase):
             lambda: self.store.totp_restore(UID, USER, [a.id]),
             lambda: self.store.totp_remove(UID, USER, [b.id]),
             lambda: self.store.totp_purge(UID, USER, [b.id]),
-            lambda: self.store.set_totp_require_auth(UID, USER, False),
+            lambda: self.store.set_totp_require_auth(UID, USER, False, True),
             lambda: self.store.totp_entries(UID, USER),
             lambda: self.store.totp_trash(UID, USER),
             lambda: self.store.totp_require_auth(UID, USER),

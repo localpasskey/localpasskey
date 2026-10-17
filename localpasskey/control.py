@@ -619,7 +619,7 @@ class ControlServer:
                 # Always asked, even when unlocked: this unlocks every process for good.
                 self._approve(pid, uid, "Show authenticator codes without asking for your password?",
                               "not changed")
-            self.store.set_totp_require_auth(target_uid, username, value)
+            self.store.set_totp_require_auth(target_uid, username, value, require_auth)
             if value != require_auth:
                 log.info("%s the password for authenticator codes of uid %d at the request of uid %d",
                          "Required" if value else "Stopped requiring", target_uid, uid)
