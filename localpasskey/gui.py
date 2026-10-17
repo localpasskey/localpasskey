@@ -1593,8 +1593,9 @@ class Window(QMainWindow):
         if self._busy:
             return
         dialog = CodeDialog(self)
-        if dialog.exec() != QDialog.DialogCode.Accepted or not self._start("Waiting for you to authenticate…"):
+        if dialog.exec() != QDialog.DialogCode.Accepted or self._still_busy():
             return
+        self._start("Waiting for you to authenticate…")
         payload = {"command": "totp", "action": "add", "entry": dialog.entry()}
 
         def finished(result, error):
@@ -1605,11 +1606,18 @@ class Window(QMainWindow):
 
         self.tasks.run(lambda: request(payload), finished)
 
+    def _still_busy(self):
+        """After a dialog: True, and say so, if another request started while it was open."""
+        if self._busy:
+            self.statusBar().showMessage("Not saved: another request is still running. Try again when it finishes.",
+                                         6000)
+        return self._busy
+
     def edit_code(self, entry):
         if self._busy:
             return
         dialog = CodeDialog(self, entry)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted or self._still_busy():
             return
         self._send({"command": "totp", "action": "update", "id": entry["id"], **dialog.labels()},
                    "Waiting for you to authenticate…", "Authenticator code changed", moving=False)

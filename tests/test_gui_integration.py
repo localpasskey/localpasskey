@@ -770,6 +770,24 @@ class CodesTabTests(unittest.TestCase):
         self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
         self.assertIn("octo-new", [e.account for e in self.server.store.totp_entries(self.uid, self.username)])
 
+    def test_a_request_started_while_the_dialog_was_open_is_not_overrun(self):
+        self.open_codes()
+        self.select("github.com")
+
+        def accept_while_busy(dialog):
+            self.window._busy = True  # another request began meanwhile
+            return gui.QDialog.DialogCode.Accepted
+
+        for trigger in (self.window.add_code, lambda: self.window.edit_code(self.window.code_details.entry)):
+            with self.subTest(trigger=trigger), patch.object(gui.CodeDialog, "exec", accept_while_busy), \
+                    patch.object(self.window.tasks, "run") as run:
+                self.window._busy = False
+                trigger()
+                run.assert_not_called()
+                self.assertEqual(self.window.statusBar().currentMessage(),
+                                 "Not saved: another request is still running. Try again when it finishes.")
+        self.window._busy = False
+
     def test_trash_lists_deleted_codes_and_purge_needs_the_site_typed(self):
         self.open_codes()
         self.select("github.com")
