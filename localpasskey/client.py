@@ -8,6 +8,7 @@ import socket
 from typing import Optional
 
 DEFAULT_SOCKET = "/run/localpasskey/control.sock"
+MAX_REQUEST = 16 * 1024 * 1024  # control.MAX_REQUEST: the service drops a longer request unanswered
 
 
 class ServiceError(Exception):
@@ -24,11 +25,15 @@ def socket_path() -> str:
 
 def request(payload: dict, path: Optional[str] = None, timeout: float = 180) -> dict:
     path = path or socket_path()
+    line = json.dumps(payload).encode() + b"\n"
+    if len(line) > MAX_REQUEST:
+        raise ServiceError(f"the request is too large for localpasskeyd (over {MAX_REQUEST // 2**20} MiB); "
+                           "import a smaller backup, for example one website at a time")
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC) as sock:
             sock.settimeout(timeout)  # 180 s by default: allow the management authentication dialog to finish.
             sock.connect(path)
-            sock.sendall(json.dumps(payload).encode() + b"\n")
+            sock.sendall(line)
             with sock.makefile("rb") as stream:
                 data = stream.readline()
     except (FileNotFoundError, ConnectionRefusedError):

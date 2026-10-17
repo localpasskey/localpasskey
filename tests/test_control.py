@@ -562,16 +562,29 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(created["old.example"], 100.0)
         self.assertAlmostEqual(created["future.example"], now, delta=30)
 
-    def test_an_import_of_a_full_store_of_rsa_passkeys_and_codes_fits_in_one_request(self):
-        rsa_record = self.normalized(alg=cose.RS256, id=b"i" * 512, user_id=b64encode(b"u" * 64),
+    def test_an_import_of_a_full_store_of_rsa_passkeys_fits_in_one_request(self):
+        rsa_record = self.normalized(alg=cose.RS256, user_id=b64encode(b"u" * 64),
                                      rp_id="x" * 253, rp_name="n" * 255, user_name="n" * 255,
                                      user_display_name="n" * 255)
-        # Non-ASCII labels: each character is six bytes once the client escapes it.
-        code_record = {"id": b64encode(b"c" * 16), "site": "x" * 253, "issuer": "é" * 255, "account": "é" * 255,
+        request = {"command": "import", "credentials": [rsa_record] * 4096}
+        self.assertLess(len(json.dumps(request)) + 1, MAX_REQUEST)
+
+    def test_a_full_store_of_codes_fits_beside_many_passkeys(self):
+        # 4096 codes with long labels and the longest secret, beside 1000 RSA passkeys.
+        rsa_record = self.normalized(alg=cose.RS256, user_id=b64encode(b"u" * 64), rp_id="x" * 100,
+                                     rp_name="n" * 64, user_name="n" * 64, user_display_name="n" * 64)
+        code_record = {"id": b64encode(b"c" * 16), "site": "x" * 100, "issuer": "i" * 64, "account": "a" * 100,
                        "secret": totp.encode_secret(b"s" * 128), "algorithm": "SHA512", "digits": 8,
                        "period": 300, "created": 1700000000.123456}
-        request = {"command": "import", "credentials": [rsa_record] * 4096, "codes": [code_record] * 4096}
+        request = {"command": "import", "credentials": [rsa_record] * 1000, "codes": [code_record] * 4096}
         self.assertLess(len(json.dumps(request)) + 1, MAX_REQUEST)
+
+    def test_the_client_refuses_a_request_the_service_would_drop(self):
+        self.assertEqual(client.MAX_REQUEST, MAX_REQUEST)
+        with patch("localpasskey.client.socket.socket") as sock:
+            with self.assertRaisesRegex(client.ServiceError, "too large for localpasskeyd"):
+                client.request({"command": "import", "credentials": ["x" * MAX_REQUEST]})
+            sock.assert_not_called()
 
     def test_bad_selectors(self):
         for request in ({"ids": ["ab"]}, {"ids": ["ffffffffffff"]}, {"site": "nowhere.test"}, {}):
