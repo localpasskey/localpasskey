@@ -378,6 +378,14 @@ class CliTotpTests(unittest.TestCase):
         self.assertTrue(all("codes" not in call.args[0] and "code_ids" not in call.args[0]
                             for call in sent.call_args_list))
 
+    def test_cxf_export_never_fails_over_the_codes_note(self):
+        self.fixture.store._totp_path(self.fixture.uid).write_text("{not json")
+        path = os.path.join(self.tmp, "keys.json")
+        code, out, err = self.run_cli("export", path, "--format", "cxf", "--unencrypted")
+        self.assertEqual(code, 0, err)
+        self.assertIn("Exported 3 passkeys to", out)
+        self.assertNotIn("totp.json", err)
+
     def test_import_plans_and_sends_codes(self):
         existing = self.store_code()
         fresh = code_record(TotpEntry(id=os.urandom(16), sealed_secret=b"", site="gitlab.com", issuer="GitLab",

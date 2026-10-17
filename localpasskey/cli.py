@@ -312,9 +312,11 @@ def cmd_export(args):
         if chosen:
             print()
         _print_codes(chosen_codes)
-    if args.format == "cxf" and not args.no_codes and request(_payload(args, "status", True), args.socket)["count"]:
-        print("localpasskey: authenticator codes are not included in CXF files; use the default format "
-              "to back them up.", file=sys.stderr)
+    if args.format == "cxf" and not args.no_codes:
+        with contextlib.suppress(ServiceError):  # only a note: counting the codes must not stop the export
+            if request(_payload(args, "status", True), args.socket)["count"]:
+                print("localpasskey: authenticator codes are not included in CXF files; use the default "
+                      "format to back them up.", file=sys.stderr)
     if args.unencrypted:
         print("localpasskey: warning: the file will NOT be encrypted. Anyone who can read it can sign "
               "in as you on these sites.", file=sys.stderr)
