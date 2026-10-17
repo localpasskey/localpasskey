@@ -669,6 +669,7 @@ class CredentialStore:
             raise KeyError(entry_id)
 
     def totp_unseal(self, uid: int, entry: TotpEntry) -> bytes:
+        """The plaintext seed of ``entry``; it never leaves the daemon but in an approved export."""
         try:
             return self._open(uid, _totp_label(entry.id), entry.sealed_secret)
         except StoreError:
