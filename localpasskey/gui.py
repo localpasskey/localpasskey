@@ -56,7 +56,8 @@ SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 COLUMNS = ("Website", "Account", "Last used")
 TRASH_COLUMNS = ("Website", "Account", "Deleted")
 CODE_COLUMNS = ("Website", "Account", "Code")
-TICK_MS = 1000  # the countdown; codes are only fetched again when one runs out
+TICK_MS = 1000  # the countdown, and the check whether the codes need fetching again
+KEEP_UNLOCKED_S = 60  # fetch at least this often: long periods must not let the service's 5 min unlock run out
 COPY_CLEAR_MS = 30000
 HIDDEN_CODE = "••••••"
 LOCKED = "authenticator codes are locked"  # the service's error once an unlock has gone
@@ -923,6 +924,7 @@ class Window(QMainWindow):
         self._fetching = False
         self._fetch_again = False
         self._values = {}  # code ID -> (code, monotonic time it runs out, period)
+        self._fetched_at = 0.0  # monotonic time of the last successful code fetch
         self._code_count = None  # live codes, for the export checkbox
         self._copied = None  # the code Copy Code put on the clipboard
         self._copied_until = 0.0
@@ -1179,7 +1181,7 @@ class Window(QMainWindow):
             elif not str(error).startswith("no matching"):  # the last code was just deleted
                 self._error(error)
             return
-        now = time.monotonic()
+        now = self._fetched_at = time.monotonic()
         self._show_values({c["id"]: (c["code"], now + c["remaining"], c["period"]) for c in codes})
 
     def _show_values(self, values):
@@ -1202,7 +1204,7 @@ class Window(QMainWindow):
         if self.side.currentWidget() is self.code_details:
             self.code_details.show_value(self._values.get(self.code_details.entry["id"]))
         now = time.monotonic()
-        if any(until <= now for _, until, _ in self._values.values()):
+        if now - self._fetched_at >= KEEP_UNLOCKED_S or any(until <= now for _, until, _ in self._values.values()):
             self._fetch_codes()
 
     def set_trash(self, on):

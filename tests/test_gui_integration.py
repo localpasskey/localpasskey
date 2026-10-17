@@ -662,6 +662,17 @@ class CodesTabTests(unittest.TestCase):
             fetch.assert_not_called()
             self.wait_for(lambda: fetch.called)
 
+    def test_long_periods_still_fetch_every_minute_to_keep_the_unlock(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.window._show_values({k: (c, time.monotonic() + 290, 300) for k, (c, _, _) in self.window._values.items()})
+        with patch.object(self.window, "_fetch_codes") as fetch:
+            self.window._on_tick()
+            fetch.assert_not_called()
+            self.window._fetched_at -= gui.KEEP_UNLOCKED_S  # a minute without a fetch: the service would idle out
+            self.window._on_tick()
+            fetch.assert_called_once()
+
     def test_an_inactive_window_blanks_the_codes_and_fetches_none(self):
         self.open_codes()
         self.wait_for(lambda: len(self.window._values) == 3)
