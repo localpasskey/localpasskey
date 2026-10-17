@@ -803,6 +803,9 @@ class CodeDialog(QDialog):
             self.site.setText(entry["site"])
             self.issuer.setText(entry["issuer"])
             self.account.setText(entry["account"])
+        self.edited = set()  # the label fields the user has typed in
+        for field in (self.site, self.issuer, self.account):
+            field.textEdited.connect(lambda _, field=field: self.edited.add(field))
         self.key.textChanged.connect(self._parse)
         self.site.textChanged.connect(self._sync)
         self._parse(self.key.text())
@@ -823,11 +826,11 @@ class CodeDialog(QDialog):
                 if self.parsed is None:
                     self.problem = "Paste the setup key or link the website shows"
         if self.parsed:
-            for field, value in ((self.issuer, self.parsed["issuer"]), (self.account, self.parsed["account"])):
-                if value:
+            suggestion = totp.site_from_issuer(self.parsed["issuer"])
+            for field, value in ((self.issuer, self.parsed["issuer"]), (self.account, self.parsed["account"]),
+                                 (self.site, suggestion)):
+                if field not in self.edited:  # what the user typed wins over any link
                     field.setText(value)
-            if not self.site.text():
-                self.site.setText(totp.site_from_issuer(self.parsed["issuer"]))
             usual = (totp.DEFAULT_ALGORITHM, totp.DEFAULT_DIGITS, totp.DEFAULT_PERIOD)
             unusual = (self.parsed["algorithm"], self.parsed["digits"], self.parsed["period"]) != usual
             self.note.setText(f"This code is unusual: {code_type(self.parsed)}." if unusual else "")

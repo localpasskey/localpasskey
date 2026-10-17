@@ -203,6 +203,24 @@ class CodeTests(unittest.TestCase):
         dialog.account.setText(" octo ")
         self.assertEqual(dialog.labels(), {"site": "github.com", "issuer": "GitHub", "account": "octo"})
 
+    def test_each_parse_refills_the_labels_the_user_has_not_edited(self):
+        from PyQt6.QtTest import QTest
+        dialog = gui.CodeDialog(self.parent)
+
+        def labels():
+            return dialog.site.text(), dialog.issuer.text(), dialog.account.text()
+
+        dialog.key.setText("otpauth://totp/example.com:bob?secret=JBSWY3DPEHPK3PXP&issuer=example.com")
+        self.assertEqual(labels(), ("example.com", "example.com", "bob"))
+        dialog.key.setText("otpauth://totp/Big%20Corp:carol?secret=JBSWY3DPEHPK3PXP&issuer=Big%20Corp")
+        self.assertEqual(labels(), ("", "Big Corp", "carol"), "a second link replaces the first one's labels")
+        dialog.key.setText("JBSWY3DPEHPK3PXP")
+        self.assertEqual(labels(), ("", "", ""))
+        QTest.keyClicks(dialog.account, "me")
+        QTest.keyClicks(dialog.site, "mine.example")
+        dialog.key.setText("otpauth://totp/example.com:bob?secret=JBSWY3DPEHPK3PXP&issuer=example.com")
+        self.assertEqual(labels(), ("mine.example", "example.com", "me"), "typed fields are kept")
+
     def test_a_typed_website_is_reduced_to_its_host_name(self):
         dialog = gui.CodeDialog(self.parent, {"site": "", "issuer": " GitHub ", "account": " octocat "})
         dialog.site.setText(" https://GitHub.com/login ")
