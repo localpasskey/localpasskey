@@ -574,6 +574,7 @@ class CodesTabTests(unittest.TestCase):
                    if self.window.proxy.index(r, 0).data(Qt.ItemDataRole.DisplayRole) == title)
         self.window.table.setCurrentIndex(self.window.proxy.index(row, 0))
 
+    @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
     def test_the_tab_unlocks_shows_the_codes_and_leaving_locks_them(self):
         self.open_codes()
         self.wait_for(lambda: len(self.window._values) == 3)
