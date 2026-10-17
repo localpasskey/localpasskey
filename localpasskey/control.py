@@ -10,7 +10,8 @@ Authenticator codes (TOTP) live in the same store: ``"totp"`` mirrors the
 passkey commands, and showing a code needs an unlock unless the user turned
 that setting off. An unlock is kept in memory for the calling process (pid
 plus its /proc start time, so a recycled pid does not inherit it) and expires
-after ``UNLOCK_IDLE`` seconds without a code request. Root is always unlocked. No reply but export carries a seed.
+after ``UNLOCK_IDLE`` seconds without a code request. Root is always unlocked.
+No reply but export carries a seed.
 
 Export and import exchange "normalized records" (see ``record`` and
 ``_parse_record``) with plaintext PKCS#8 keys, and code records (``code_record``
@@ -545,7 +546,7 @@ class ControlServer:
             return None  # the process is gone
 
     def _unlocked(self, pid, uid) -> bool:
-        """Whether this process may see codes without a prompt; touching it extends the unlock."""
+        """Whether this process may see codes without a prompt; drops an expired unlock."""
         if uid == 0:
             return True
         key = self._unlock_key(pid, uid)
