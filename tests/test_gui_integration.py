@@ -960,5 +960,28 @@ class CodesTabTests(unittest.TestCase):
                          ["Show authenticator codes without asking for your password?"] * 2)
 
 
+    @unittest.skipIf(os.getuid() == 0, "root is never asked for a password")
+    def test_turning_the_password_off_unlocks_a_locked_codes_tab_without_asking(self):
+        self.server.verifier.verdict = Verdict.DENIED
+        self.open_codes()
+        self.assertFalse(self.window._unlocked)
+        self.server.verifier.verdict = Verdict.APPROVED
+        asked = []
+
+        def flip(dialog):
+            self.wait_for(dialog.ask.isEnabled)
+            dialog.ask.click()
+            self.wait_for(lambda: dialog.ask.isEnabled() and not dialog.ask.isChecked())
+            asked.append(len(self.server.verifier.checks))
+            dialog.reject()
+
+        self.answer_dialog(flip)
+        gui.SettingsDialog(self.window).exec()
+        self.wait_for(lambda: self.window._unlocked)
+        self.window.activateWindow()  # the offscreen platform does not hand activation back by itself
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.assertEqual(self.window.model.rowCount(), 3)
+        self.assertEqual(len(self.server.verifier.checks), asked[0], "the unlock asked nothing")
+
 if __name__ == "__main__":
     unittest.main()

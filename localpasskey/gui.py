@@ -899,6 +899,8 @@ class SettingsDialog(QDialog):
         def sent(result, error):
             if error is not None:
                 self.window._error(error)
+            elif not checked and self.window._codes_tab:
+                self.window.unlock_codes()  # no password now, so this asks nothing; no-op if unlocked
             self._load()  # a refusal puts the box back as the service has it
 
         self.window.tasks.run(lambda: request(payload), sent)
