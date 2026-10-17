@@ -1593,14 +1593,18 @@ class Window(QMainWindow):
         if self._busy:
             return
         dialog = CodeDialog(self)
-        if dialog.exec() != QDialog.DialogCode.Accepted or self._still_busy():
+        send = dialog.exec() == QDialog.DialogCode.Accepted and not self._still_busy()
+        entry, pasted = (dialog.entry(), dialog.pasted) if send else (None, None)
+        dialog.key.clear()  # a closed dialog stays the window's child until deleted: keep no key in it
+        dialog.deleteLater()
+        if not send:
             return
         self._start("Waiting for you to authenticate…")
-        payload = {"command": "totp", "action": "add", "entry": dialog.entry()}
+        payload = {"command": "totp", "action": "add", "entry": entry}
 
         def finished(result, error):
             clipboard = QGuiApplication.clipboard()
-            if error is None and dialog.pasted and clipboard.text() == dialog.pasted:
+            if error is None and pasted and clipboard.text() == pasted:
                 clipboard.clear()  # the setup key has done its job
             self._finish(error, "Authenticator code added")
 
@@ -1617,9 +1621,12 @@ class Window(QMainWindow):
         if self._busy:
             return
         dialog = CodeDialog(self, entry)
-        if dialog.exec() != QDialog.DialogCode.Accepted or self._still_busy():
+        send = dialog.exec() == QDialog.DialogCode.Accepted and not self._still_busy()
+        labels = dialog.labels()
+        dialog.deleteLater()
+        if not send:
             return
-        self._send({"command": "totp", "action": "update", "id": entry["id"], **dialog.labels()},
+        self._send({"command": "totp", "action": "update", "id": entry["id"], **labels},
                    "Waiting for you to authenticate…", "Authenticator code changed", moving=False)
 
     def confirm_delete_code(self, entry):

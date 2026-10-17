@@ -727,7 +727,7 @@ class CodesTabTests(unittest.TestCase):
         seen = []
 
         def fill(dialog):
-            seen.append(dialog)
+            seen.append(dialog.windowTitle())
             self.assertEqual(dialog.key.echoMode(), gui.QLineEdit.EchoMode.Password)
             self.assertFalse(dialog.save_button.isEnabled())
             dialog.key.setText("not a key 0")
@@ -747,7 +747,7 @@ class CodesTabTests(unittest.TestCase):
         self.answer_dialog(fill)
         self.window.add_code_action.trigger()
         self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
-        self.assertEqual(seen[0].windowTitle(), "Add Authenticator Code")
+        self.assertEqual(seen, ["Add Authenticator Code"])
         added = [e for e in self.server.store.totp_entries(self.uid, self.username) if e.site == "example.com"]
         self.assertEqual([(e.account, e.digits) for e in added], [("bob", 8)])
         self.assertEqual(self.app.clipboard().text(), "")
@@ -780,6 +780,7 @@ class CodesTabTests(unittest.TestCase):
         self.answer_dialog(fill)
         self.window.add_code_action.trigger()
         self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+        self.assertEqual(self.window.findChildren(gui.CodeDialog), [], "the closed dialog still holds the key")
         self.window.activateWindow()
         self.wait_for(lambda: len(self.window._values) == 4)
         self.select("leak.example")
