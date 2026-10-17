@@ -265,6 +265,15 @@ class TotpControlTests(unittest.TestCase):
             self.assertFalse(self.handle({"action": "status"})["unlocked"])
         self.assertEqual(self.server._unlocks, {}, "expired unlocks are dropped")
 
+    def test_recording_an_unlock_drops_the_expired_ones(self):
+        now = time.monotonic()
+        for pid in range(1000):  # windows that quit without sending lock
+            self.server._unlocks[(self.uid, pid, 1)] = now - 1
+        live = (self.uid, 1, 2)
+        self.server._unlocks[live] = now + 60
+        self.unlock()
+        self.assertEqual(set(self.server._unlocks), {live, self.server._unlock_key(os.getpid(), self.uid)})
+
     def test_a_lock_during_a_code_request_stays_locked(self):
         self.add()
         self.unlock()

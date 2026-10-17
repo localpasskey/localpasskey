@@ -598,7 +598,11 @@ class ControlServer:
                               "not unlocked", ACTION_TOTP)
                 if key is not None:  # read before the dialog: the approved process, not a successor
                     with self._unlocks_lock:
-                        self._unlocks[key] = time.monotonic() + UNLOCK_IDLE
+                        now = time.monotonic()
+                        # A process that quits without locking leaves its unlock behind.
+                        for stale in [k for k, expiry in self._unlocks.items() if expiry <= now]:
+                            del self._unlocks[stale]
+                        self._unlocks[key] = now + UNLOCK_IDLE
             return {"ok": True, "unlocked": True}
         if action == "lock":
             key = self._unlock_key(pid, uid)
