@@ -160,7 +160,8 @@ def code(
     """The current RFC 6238 code and the seconds it stays valid, to the millisecond."""
     now = time.time() if now is None else now
     # The fraction too: clients that drop it show an expired code for up to a second.
-    return hotp(secret, int(now) // period, algorithm, digits), round(period - now % period, 3)
+    # Never 0.0: in the last half millisecond the code is still this one, so say "1 more second".
+    return hotp(secret, int(now) // period, algorithm, digits), max(round(period - now % period, 3), 0.001)
 
 
 def normalize_site(text: str) -> str:
