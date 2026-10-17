@@ -358,6 +358,18 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Exported 3 passkeys to", out)
 
+    def test_export_suggests_no_codes_when_a_secret_cannot_be_decrypted(self):
+        store = self.fixture.store
+        broken = TotpEntry(id=os.urandom(16), sealed_secret=store.seal(self.fixture.uid, b"totp\0" + os.urandom(16), SECRET),
+                           site="github.com", issuer="GitHub", account="octocat", created=1700000000.0)
+        store.totp_add(self.fixture.uid, self.fixture.name, broken)  # sealed under another code's label
+        path = os.path.join(self.tmp, "keys.lpkbackup")
+        code, _, err = self.run_cli("export", path, passphrases=[self.PASSPHRASE] * 2)
+        self.assertEqual(code, 1)
+        self.assertIn("cannot be decrypted", err)
+        self.assertTrue(err.endswith(" (use --no-codes to export only passkeys)\n"), err)
+        self.assertFalse(os.path.exists(path))
+
     def test_export_by_id_selects_no_codes(self):
         self.store_code()
         self.fixture.store._totp_path(self.fixture.uid).write_text("{not json")

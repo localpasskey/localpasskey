@@ -285,6 +285,17 @@ def join_counts(passkeys, codes):
     return " and ".join(parts) or plural(0)
 
 
+@contextlib.contextmanager
+def _suggest_no_codes(with_codes):
+    """Only the codes can be left out; a damaged totp.json or seal should not block a passkey export."""
+    try:
+        yield
+    except ServiceError as e:
+        if with_codes and ("totp.json" in str(e) or "authenticator code" in str(e)):
+            raise CliError(f"{e} (use --no-codes to export only passkeys)") from None
+        raise
+
+
 def cmd_export(args):
     if args.format == "cxf" and not args.unencrypted:
         raise CliError("CXF files are not encrypted: add --unencrypted if you really want one")
@@ -300,13 +311,8 @@ def cmd_export(args):
     selector = _selector(args, "export")
     # Passkey IDs select no codes, so they never make the service read totp.json.
     with_codes = not args.no_codes and args.format != "cxf" and bool(args.all or args.site)
-    try:
+    with _suggest_no_codes(with_codes):
         plan = request({**selector, "dry_run": True, **({"codes": True} if with_codes else {})}, args.socket)
-    except ServiceError as e:
-        # Only the codes can be left out; a damaged totp.json should not block a passkey export.
-        if with_codes and ("totp.json" in str(e) or "authenticator code" in str(e)):
-            raise CliError(f"{e} (use --no-codes to export only passkeys)") from None
-        raise
     chosen, chosen_codes = plan["exported"], plan.get("exported_codes", [])
     if chosen or not chosen_codes:
         _print_credentials(chosen)
@@ -333,7 +339,8 @@ def cmd_export(args):
     selector = _with_user({"command": "export", "ids": [cred["id"] for cred in chosen]}, args)
     if chosen_codes:
         selector["code_ids"] = [code["id"] for code in chosen_codes]
-    exported = _ask(selector, args)
+    with _suggest_no_codes(chosen_codes):
+        exported = _ask(selector, args)
     records, codes = exported["credentials"], exported.get("codes", [])
     if args.unencrypted:
         data = transfer.export_cxf(records)
