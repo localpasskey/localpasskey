@@ -1,6 +1,6 @@
 .TH LOCALPASSKEY-GUI 1 "October 2026" "localpasskey 0.3.1" "User Commands"
 .SH NAME
-localpasskey-gui \- window for browsing, restoring and removing the passkeys stored on this computer
+localpasskey-gui \- window for browsing, restoring and removing the passkeys and authenticator codes stored on this computer
 .SH SYNOPSIS
 .B localpasskey-gui
 .SH DESCRIPTION
@@ -37,6 +37,53 @@ Nothing in the trash expires.
 removes one passkey for good: type the site name to enable its button.
 This cannot be undone. Remove passkeys from your account settings on the
 website as well.
+.SH AUTHENTICATOR CODES
+The
+.B Authenticator Codes
+tab next to
+.B Passkeys
+lists the time-based one-time codes (TOTP) that the service keeps for sites
+that ask for one as a second step. They complement passkeys and do not
+replace them: a fake site can ask for a code and pass it on, which it cannot
+do with a passkey. Opening the tab asks for your password once (polkit action
+.BR org.localpasskey.totp );
+until then it shows a locked message with an
+.B Unlock
+button. Once unlocked, the list shows the current code of each entry, which
+changes by itself, and the details show it in large digits with a countdown
+and a
+.B Copy Code
+button. Copied codes are removed from the clipboard after 30 seconds if they
+are still there. Codes are hidden while the window is in the background, and
+the tab locks again when you leave it or close the window, and after 5 minutes in the background.
+.PP
+In this tab the Code menu, also on right-click, replaces the Passkey menu.
+.B Add Code\[u2026]
+takes the
+.B otpauth://totp/
+link or the setup key that the site shows next to its QR code; type it or
+use
+.BR Paste ,
+which reads the clipboard only when clicked. The dialog checks it as you
+type, fills in the issuer and account from a link, and suggests the
+website. After saving, it clears the clipboard if it still holds the pasted
+text. The window never shows or copies a setup key.
+.BR Edit\[u2026] ,
+.BR "Move to Trash\[u2026]" ,
+.B Show Trash
+and, in the trash,
+.B Restore
+and
+.B Delete Permanently\[u2026]
+work as for passkeys; permanent deletion asks you to type the site, or the
+issuer when there is no site, and always asks for your password. The other changes do not ask again while
+the tab is unlocked.
+.PP
+.B Settings\[u2026]
+in the File menu holds
+.BR "Ask for my password before showing authenticator codes" ,
+on by default. Turning it off asks for your password; turning it on does
+not.
 .SH THE PIN
 Browsers ask for a PIN in their security-key settings before they list or
 delete the passkeys of a security key.
@@ -47,8 +94,8 @@ new one, changes it or removes it. The lock is open when no PIN is set,
 closed when one is, and red when it is locked after too many wrong attempts;
 its tooltip says which. The PIN is not your login password and is never sent
 to websites; if you forget it, set a new one. Only a hash of the PIN is
-stored, and the PIN alone never deletes a passkey: everything the window
-changes still asks for your password. The command-line equivalent is
+stored, and the PIN alone never deletes a passkey: every passkey change in
+the window still asks for your password. The command-line equivalent is
 .B localpasskey pin
 in
 .BR localpasskey (1).
@@ -67,11 +114,17 @@ in
 .BR localpasskey (1)
 for that.
 .PP
+.B Include authenticator codes
+in the export dialog, checked by default, adds your authenticator codes with
+their setup keys to the backup; it is disabled when you have none. Such a
+backup cannot be opened by LocalPasskey 0.3.1 or earlier.
+.PP
 .B Import Passkeys\[u2026]
 opens a LocalPasskey backup, a CXF file or an unencrypted Bitwarden JSON
 export. It asks for the passphrase only for a backup, then lists what will be
 imported and what is skipped and why: already on this computer (also in the
 trash), another passkey for the same account, or twice in the file.
+Authenticator codes in a backup are listed and imported with the passkeys.
 .B Import
 then asks for your password.
 .SH KEYBOARD SHORTCUTS
@@ -83,10 +136,14 @@ Ctrl+T
 Show or hide the trash.
 .TP
 Ctrl+C
-Copy the username of the selected passkey.
+Copy the username of the selected passkey, or the current code of the
+selected authenticator code.
+.TP
+Ctrl+N
+Add an authenticator code (in the Authenticator Codes tab).
 .TP
 Delete
-Move the selected passkey to the trash.
+Move the selected passkey or authenticator code to the trash.
 .TP
 F5
 Refresh the list.
