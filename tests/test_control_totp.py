@@ -577,6 +577,11 @@ class TotpControlTests(unittest.TestCase):
         self.assertEqual((reply["credentials"], len(reply["codes"])), ([], 2))
         with self.assertRaisesRegex(ControlError, "nothing to export"):
             self.raw({"command": "export", "site": "nowhere.example", "codes": True, "dry_run": True})
+        # A blank site normalizes to "" but never selects the codes saved without a website.
+        self.add(site="", issuer="NoSite", account="blank")
+        for site in ("   ", "\t"):
+            with self.subTest(site=site), self.assertRaisesRegex(ControlError, "nothing to export"):
+                self.raw({"command": "export", "site": site, "codes": True, "dry_run": True})
         with self.assertRaisesRegex(ControlError, "no matching passkeys"):
             self.raw({"command": "export", "all": True, "dry_run": True})
         with self.assertRaisesRegex(ControlError, "invalid codes selector"):

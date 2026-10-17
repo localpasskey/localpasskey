@@ -468,7 +468,8 @@ class ControlServer:
             chosen_codes = live_codes
         elif request.get("codes") and isinstance(request.get("site"), str) and request["site"]:
             site = totp.normalize_site(request["site"])
-            chosen_codes = [e for e in live_codes if e.site == site]
+            # "   " normalizes to "", which must not pick every code saved without a website.
+            chosen_codes = [e for e in live_codes if e.site == site] if site else []
         else:
             chosen_codes = []
         if with_codes and not any(request.get(field) for field in ("all", "site", "ids")):
