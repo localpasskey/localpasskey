@@ -760,6 +760,22 @@ class CodesTabTests(unittest.TestCase):
         self.window.activateWindow()  # the offscreen platform does not hand activation back by itself
         self.wait_for(lambda: len(self.window._values) == 4)
 
+    def test_add_code_keeps_a_clipboard_that_no_longer_holds_the_pasted_link(self):
+        self.app.clipboard().setText("otpauth://totp/example.com:bob?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU")
+
+        def fill(dialog):
+            next(b for b in dialog.findChildren(gui.QPushButton) if b.text() == "Paste").click()
+            self.assertEqual(dialog.feedback.text(), "Setup key is valid")
+            self.app.clipboard().setText("copied after pasting")
+            dialog.save_button.click()
+
+        self.open_codes()
+        self.answer_dialog(fill)
+        self.window.add_code_action.trigger()
+        self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+        self.assertEqual(self.window.statusBar().currentMessage(), "Authenticator code added")
+        self.assertEqual(self.app.clipboard().text(), "copied after pasting")
+
     def test_the_setup_key_and_the_copied_code_are_never_shown_as_text(self):
         key = "QZ7XKW3MVB5TNRYJ2PLDH6GCFE4SAUOI"  # distinctive: any 12 characters of it would stand out
         link = f"otpauth://totp/Leak%20Check:eve?secret={key}&issuer=leak.example&period=60&digits=8"
