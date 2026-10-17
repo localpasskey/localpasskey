@@ -221,8 +221,8 @@ In the window, the lock at the bottom right shows it: open when no PIN is set,
 closed when one is, red when it is locked after too many wrong attempts. Hover
 over it for details, or click it to set, change or remove the PIN. If you
 forget the PIN, just set a new one: your passkeys are kept. Only a hash is
-stored, and the PIN alone never deletes a passkey: every change still asks for
-your password.
+stored, and the PIN alone never deletes a passkey: every passkey change still
+asks for your password.
 
 In the window, *View → Show Trash* (Ctrl+T) switches the list to the trash,
 with restore and permanent deletion there; the Passkey menu also moves all
