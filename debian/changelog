@@ -1,3 +1,35 @@
+localpasskey (0.4.0) unstable; urgency=medium
+
+  * Feature: authenticator codes (TOTP). Paste a site's otpauth://totp/
+    link or setup key into the window's new Authenticator Codes tab
+    (Add Code) or `localpasskey totp add`, and LocalPasskey shows the
+    current code. The seed is sealed in the service like a passkey key,
+    in its own per-user file, and never leaves it except in an export you
+    approve; the window and the CLI only ever receive the 6 or 8 digits.
+  * Feature: showing codes asks for your password by default. Opening the
+    tab asks once and stays unlocked for that window until you leave the
+    tab, close the window, or it shows no codes for 5 minutes (in the
+    background or the trash, for example); `localpasskey totp code` asks
+    each time. Turning the password off (File -> Settings, or
+    `totp settings --require-password no`) asks for your password;
+    turning it back on never does.
+  * Feature: deleted codes go to a trash with restore and permanent
+    deletion, like passkeys. Copy Code clears the clipboard after 30 s if it
+    still holds that code.
+  * Export: backups include your authenticator codes by default (the
+    window's checkbox, or `export --no-codes` to leave them out); --site
+    takes that website's codes, passkey IDs take none. A backup with codes
+    is format version 2, which 0.3.x refuses instead of dropping the codes.
+    Import reads codes from such backups; CXF and Bitwarden files are
+    unchanged.
+  * New polkit action org.localpasskey.totp for showing codes.
+  * CLI: pkttyagent now also starts when standard input is a pipe but a
+    terminal is attached.
+  * Docs: README, localpasskey(1), localpasskey-gui(1) and localpasskeyd(8)
+    describe authenticator codes.
+
+ -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Sat, 17 Oct 2026 12:32:16 +0000
+
 localpasskey (0.3.1) unstable; urgency=medium
 
   * Security: a sign-in approval is tied to the site and request it was
