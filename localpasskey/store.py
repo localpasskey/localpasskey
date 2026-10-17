@@ -29,7 +29,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 # trashed passkeys as live and dropping the key on its next write.
 FORMAT_VERSION = 2
 PIN_FORMAT_VERSION = 1
+TOTP_FORMAT_VERSION = 1
 MAX_CREDENTIALS_PER_USER = 4096
+MAX_TOTP_PER_USER = 4096  # separate from passkeys; the trash counts until purged
 _NONCE_SIZE = 12
 LAST_USED_RESOLUTION = 60.0  # readers show last_used at minute resolution
 
@@ -117,6 +119,60 @@ class Credential:
 
 
 @dataclass
+class TotpEntry:
+    """An authenticator code (TOTP) setup; the secret is sealed like a key."""
+
+    id: bytes  # 16 random bytes
+    sealed_secret: bytes  # seal(uid, b"totp\0" + id, secret)
+    site: str = ""  # what the user confirmed, e.g. "github.com"; may be ""
+    issuer: str = ""  # from the link; display only
+    account: str = ""
+    algorithm: str = "SHA1"
+    digits: int = 6
+    period: int = 30
+    created: float = 0.0
+    deleted: Optional[float] = None
+
+    def to_json(self) -> dict:
+        return {
+            "id": b64encode(self.id),
+            "site": self.site,
+            "issuer": self.issuer,
+            "account": self.account,
+            "secret": b64encode(self.sealed_secret),
+            "algorithm": self.algorithm,
+            "digits": self.digits,
+            "period": self.period,
+            "created": self.created,
+            "deleted": self.deleted,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict) -> "TotpEntry":
+        deleted = data.get("deleted")
+        if deleted is not None and (isinstance(deleted, bool) or not isinstance(deleted, (int, float))):
+            # Fail closed: a corrupt timestamp must not turn a trashed code live.
+            raise ValueError(f"invalid deleted timestamp {deleted!r}")
+        return cls(
+            id=b64decode(data["id"]),
+            sealed_secret=b64decode(data["secret"]),
+            site=str(data.get("site", "")),
+            issuer=str(data.get("issuer", "")),
+            account=str(data.get("account", "")),
+            algorithm=str(data.get("algorithm", "SHA1")),
+            digits=int(data.get("digits", 6)),
+            period=int(data.get("period", 30)),
+            created=float(data.get("created", 0.0)),
+            deleted=None if deleted is None else float(deleted),
+        )
+
+
+def _totp_label(entry_id: bytes) -> bytes:
+    # The fixed prefix keeps these AADs apart from credential IDs, which are raw.
+    return b"totp\0" + entry_id
+
+
+@dataclass
 class PinState:
     hash: bytes  # LEFT(SHA-256(PIN), 16)
     retries: int
@@ -195,6 +251,9 @@ class CredentialStore:
 
     def _path(self, uid: int) -> Path:
         return self.state_dir / "users" / str(uid) / "credentials.json"
+
+    def _totp_path(self, uid: int) -> Path:
+        return self.state_dir / "users" / str(uid) / "totp.json"
 
     def _pin_path(self, uid: int) -> Path:
         return self.state_dir / "users" / str(uid) / "pin.json"
@@ -444,3 +503,174 @@ class CredentialStore:
                 "retries": state.retries,
             }
             _write_file(path, json.dumps(doc, indent=1).encode() + b"\n")
+
+    def _read_totp(self, uid: int, username: str) -> Tuple[bool, List[TotpEntry]]:
+        """The require_auth setting and every entry, trashed ones included."""
+        path = self._totp_path(uid)
+        try:
+            doc = json.loads(path.read_bytes())
+        except FileNotFoundError:
+            return True, []
+        except ValueError as e:
+            raise StoreError(f"{path} is not valid JSON: {e}") from None
+        if not isinstance(doc, dict) or doc.get("format") != TOTP_FORMAT_VERSION or doc.get("uid") != uid:
+            raise StoreError(f"{path} has an unexpected format or uid")
+        if doc.get("user") != username:
+            raise StoreError(f"{path} belongs to user {doc.get('user')!r}, not {username!r}")
+        require_auth = doc.get("require_auth", True)
+        if not isinstance(require_auth, bool):
+            # Fail closed: only an explicit false shows codes without a password.
+            raise StoreError(f"{path} has an invalid require_auth value")
+        entries = doc.get("entries")
+        if not isinstance(entries, list):
+            raise StoreError(f"{path} has no valid entries list")
+        try:
+            return require_auth, [TotpEntry.from_json(e) for e in entries]
+        except (KeyError, TypeError, ValueError, OverflowError, AttributeError) as e:
+            raise StoreError(f"{path} contains a malformed authenticator code: {e}") from None
+
+    def _write_totp(self, uid: int, username: str, require_auth: bool, entries: List[TotpEntry]) -> None:
+        path = self._totp_path(uid)
+        _make_private_dir(path.parent.parent)
+        _make_private_dir(path.parent)
+        doc = {
+            "format": TOTP_FORMAT_VERSION,
+            "uid": uid,
+            "user": username,
+            "require_auth": require_auth,
+            "entries": [e.to_json() for e in entries],
+        }
+        _write_file(path, json.dumps(doc, indent=1).encode() + b"\n")
+
+    def totp_entries(self, uid: int, username: str) -> List[TotpEntry]:
+        """The LIVE authenticator codes of a user; the trash is hidden here."""
+        with self._lock:
+            return [e for e in self._read_totp(uid, username)[1] if e.deleted is None]
+
+    def totp_trash(self, uid: int, username: str) -> List[TotpEntry]:
+        """The trashed authenticator codes of a user."""
+        with self._lock:
+            return [e for e in self._read_totp(uid, username)[1] if e.deleted is not None]
+
+    def totp_add(self, uid: int, username: str, entry: TotpEntry) -> None:
+        """Store a new authenticator code."""
+        with self._lock:
+            require_auth, entries = self._read_totp(uid, username)
+            if len(entries) >= MAX_TOTP_PER_USER:
+                raise StoreFull(f"uid {uid} already has {len(entries)} authenticator codes")
+            entries.append(entry)
+            self._write_totp(uid, username, require_auth, entries)
+
+    def totp_import(
+        self, uid: int, username: str, entries: Iterable[TotpEntry], dry_run: bool = False
+    ) -> Tuple[List[TotpEntry], List[Tuple[TotpEntry, str]]]:
+        """Add ``entries`` in one write, skipping each one that would clash.
+
+        Returns ``(imported, skipped)``; skipped entries carry a reason. An ID
+        already known (live or trashed), a live code with the same secret, site
+        and account, a duplicate ID within ``entries`` and anything beyond the
+        capacity are skipped. ``dry_run`` plans without writing."""
+        with self._lock:
+            require_auth, stored = self._read_totp(uid, username)
+            live = [e for e in stored if e.deleted is None]
+            live_ids = {e.id for e in live}
+            trashed_ids = {e.id for e in stored if e.deleted is not None}
+            same = {(self.totp_unseal(uid, e), e.site, e.account) for e in live}
+            seen_ids = set()
+            imported, skipped = [], []
+            for entry in entries:
+                if entry.id in seen_ids:
+                    reason = "duplicate in the file"
+                elif entry.id in live_ids or (self.totp_unseal(uid, entry), entry.site, entry.account) in same:
+                    reason = "already on this computer"
+                elif entry.id in trashed_ids:
+                    reason = "in the trash on this computer"
+                elif len(stored) + len(imported) >= MAX_TOTP_PER_USER:
+                    reason = "store full"
+                else:
+                    reason = None
+                seen_ids.add(entry.id)
+                if reason is None:
+                    imported.append(entry)
+                else:
+                    skipped.append((entry, reason))
+            if imported and not dry_run:
+                self._write_totp(uid, username, require_auth, stored + imported)
+            return imported, skipped
+
+    def totp_remove(self, uid: int, username: str, ids: Iterable[bytes]) -> List[TotpEntry]:
+        """Move the given live codes to the trash and return them."""
+        with self._lock:
+            require_auth, entries = self._read_totp(uid, username)
+            moved = self._matching(entries, ids, trashed=False)
+            now = time.time()
+            for entry in moved:
+                entry.deleted = now
+            if moved:
+                self._write_totp(uid, username, require_auth, entries)
+            return moved
+
+    def totp_restore(self, uid: int, username: str, ids: Iterable[bytes]) -> List[TotpEntry]:
+        """Bring trashed codes back and return them."""
+        with self._lock:
+            require_auth, entries = self._read_totp(uid, username)
+            picked = self._matching(entries, ids, trashed=True)
+            for entry in picked:
+                entry.deleted = None
+            if picked:
+                self._write_totp(uid, username, require_auth, entries)
+            return picked
+
+    def totp_purge(self, uid: int, username: str, ids: Iterable[bytes]) -> List[TotpEntry]:
+        """Permanently delete trashed codes and return them."""
+        with self._lock:
+            require_auth, entries = self._read_totp(uid, username)
+            purged = self._matching(entries, ids, trashed=True)
+            if purged:
+                kept = [e for e in entries if all(e is not p for p in purged)]
+                self._write_totp(uid, username, require_auth, kept)
+            return purged
+
+    def totp_update(
+        self,
+        uid: int,
+        username: str,
+        entry_id: bytes,
+        site: Optional[str] = None,
+        issuer: Optional[str] = None,
+        account: Optional[str] = None,
+    ) -> TotpEntry:
+        """Change the labels of a live code; None leaves a field unchanged."""
+        with self._lock:
+            require_auth, entries = self._read_totp(uid, username)
+            for entry in entries:
+                if entry.id == entry_id and entry.deleted is None:
+                    if site is not None:
+                        entry.site = site
+                    if issuer is not None:
+                        entry.issuer = issuer
+                    if account is not None:
+                        entry.account = account
+                    self._write_totp(uid, username, require_auth, entries)
+                    return entry
+            raise KeyError(entry_id)
+
+    def totp_unseal(self, uid: int, entry: TotpEntry) -> bytes:
+        try:
+            return self._open(uid, _totp_label(entry.id), entry.sealed_secret)
+        except StoreError:
+            raise StoreError(
+                f"secret of authenticator code {entry.id.hex()[:12]} (uid {uid}) cannot be "
+                "decrypted; was master.key replaced?"
+            ) from None
+
+    def totp_require_auth(self, uid: int, username: str) -> bool:
+        """Whether showing this user's codes needs their password (default yes)."""
+        with self._lock:
+            return self._read_totp(uid, username)[0]
+
+    def set_totp_require_auth(self, uid: int, username: str, value: bool) -> None:
+        with self._lock:
+            require_auth, entries = self._read_totp(uid, username)
+            if require_auth != bool(value):
+                self._write_totp(uid, username, bool(value), entries)
