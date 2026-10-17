@@ -254,6 +254,30 @@ class TotpControlTests(unittest.TestCase):
             self.assertFalse(self.handle({"action": "status"})["unlocked"])
         self.assertEqual(self.server._unlocks, {}, "expired unlocks are dropped")
 
+    def test_a_lock_during_a_code_request_stays_locked(self):
+        self.add()
+        self.unlock()
+        real_code = totp.code
+
+        def lock_meanwhile(*args):
+            self.handle({"action": "lock"})  # another request while this one computes
+            return real_code(*args)
+
+        with patch("localpasskey.control.totp.code", side_effect=lock_meanwhile):
+            self.handle({"action": "code", "all": True})
+        self.assertEqual(self.server._unlocks, {}, "the code request must not re-create the unlock")
+        with self.assertRaisesRegex(ControlError, "locked"):
+            self.handle({"action": "code", "all": True})
+
+    def test_keep_unlocked_never_inserts_or_revives(self):
+        key = self.server._unlock_key(os.getpid(), self.uid)
+        self.server._keep_unlocked(key)
+        self.server._keep_unlocked(None)
+        self.assertEqual(self.server._unlocks, {})
+        self.server._unlocks[key] = time.monotonic() - 1
+        self.server._keep_unlocked(key)
+        self.assertLess(self.server._unlocks[key], time.monotonic(), "an expired unlock is not extended")
+
     def test_lock_drops_the_unlock_and_is_idempotent(self):
         self.add()
         self.unlock()

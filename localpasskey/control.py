@@ -550,9 +550,10 @@ class ControlServer:
             return expiry is not None
 
     def _keep_unlocked(self, key):
-        """Record or extend an unlock; ``key`` was read before any dialog."""
-        if key is not None:
-            with self._unlocks_lock:
+        """Extend a live unlock; never creates one, so a racing lock request wins."""
+        with self._unlocks_lock:
+            expiry = self._unlocks.get(key)
+            if expiry is not None and expiry > time.monotonic():
                 self._unlocks[key] = time.monotonic() + UNLOCK_IDLE
 
     def _totp(self, request, pid, uid, target_uid, username):
@@ -586,7 +587,9 @@ class ControlServer:
                 key = self._unlock_key(pid, uid)
                 self._approve(pid, uid, "Show the authenticator codes stored on this computer?",
                               "not unlocked", ACTION_TOTP)
-                self._keep_unlocked(key)
+                if key is not None:  # read before the dialog: the approved process, not a successor
+                    with self._unlocks_lock:
+                        self._unlocks[key] = time.monotonic() + UNLOCK_IDLE
             return {"ok": True, "unlocked": True}
         if action == "lock":
             key = self._unlock_key(pid, uid)
