@@ -220,7 +220,11 @@ Save an authenticator code. Paste the
 link or the setup key (Base32; spaces, dashes and lower case are fine) that
 the site shows next to its QR code. The command reads it from the terminal
 without echoing it, or as one line from standard input, never from the
-command line. It fills in the issuer and account from a link. Without
+command line. It fills in the issuer and account from a link;
+.B \-\-issuer
+and
+.B \-\-account
+replace them. Without
 .BR \-\-site ,
 it asks for the website when standard input is a terminal, suggesting one
 when the issuer looks like a host name, and otherwise takes that suggestion,
