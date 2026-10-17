@@ -152,7 +152,8 @@ def _totp_labels(data, fail, default=None):
         if text is not None:
             if not isinstance(text, str):
                 fail(f"{name} is missing or not a str")
-            text = text.strip()
+            # Every client gets the host of a typed website, so selectors match what is stored.
+            text = totp.normalize_site(text) if name == "site" else text.strip()
             if len(text) > MAX_LABEL_LENGTH:
                 fail(f"{name} is longer than {MAX_LABEL_LENGTH} characters")
             try:
@@ -464,7 +465,8 @@ class ControlServer:
         elif request.get("codes") and request.get("all"):
             chosen_codes = live_codes
         elif request.get("codes") and isinstance(request.get("site"), str) and request["site"]:
-            chosen_codes = [e for e in live_codes if e.site == request["site"]]
+            site = totp.normalize_site(request["site"])
+            chosen_codes = [e for e in live_codes if e.site == site]
         else:
             chosen_codes = []
         if with_codes and not any(request.get(field) for field in ("all", "site", "ids")):
@@ -667,6 +669,8 @@ class ControlServer:
             entries = self.store.totp_entries(target_uid, username)
         else:
             entries = self.store.totp_trash(target_uid, username)
+        if isinstance(request.get("site"), str):
+            request = {**request, "site": totp.normalize_site(request["site"])}
         doomed = self._select(request, entries, *CODE_WORDS)
         if action == "purge" and len(doomed) != 1:
             raise ControlError("purge permanently deletes one authenticator code at a time")

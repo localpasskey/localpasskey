@@ -416,6 +416,24 @@ class TotpControlTests(unittest.TestCase):
             with self.subTest(request=request), self.assertRaisesRegex(ControlError, problem):
                 self.handle({"action": "update", **request})
 
+    def test_the_service_keeps_and_matches_the_host_of_a_typed_website(self):
+        added = self.add(site="GitHub.com/login")
+        self.assertEqual(added["site"], "github.com")
+        updated = self.handle({"action": "update", "id": added["id"], "site": "https://WWW.github.com:443/"})
+        self.assertEqual(updated["updated"]["site"], "www.github.com")
+        reply = self.raw({"command": "import", "credentials": [], "dry_run": True,
+                          "codes": [self.code_record(site="me@imported.example:8443")]})
+        self.assertEqual(reply["imported_codes"][0]["site"], "imported.example")
+        for action in ("delete", "restore", "purge"):
+            if action == "restore":
+                self.handle({"action": "delete", "all": True})
+            with self.subTest(action=action):
+                preview = self.handle({"action": action, "site": "www.GitHub.com/x", "dry_run": True})
+                self.assertEqual([c["id"] for c in preview["deleted"]], [added["id"]])
+        self.handle({"action": "restore", "all": True})
+        plan = self.raw({"command": "export", "site": "https://www.github.com", "codes": True, "dry_run": True})
+        self.assertEqual([c["id"] for c in plan["exported_codes"]], [added["id"]])
+
     # -- delete, restore, purge -------------------------------------------
 
     def test_delete_restore_and_purge(self):
