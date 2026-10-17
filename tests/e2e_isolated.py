@@ -7,11 +7,15 @@ does not change polkit policies or open the installed authenticator.
 """
 
 import argparse
+import base64
+import hashlib
+import hmac
 import json
 import os
 import pwd
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -21,6 +25,27 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PRODUCT_ID = 0x4C52
+SECRET = b"12345678901234567890123456789012"  # the SHA-256 seed of RFC 6238 Appendix B
+SETUP_KEY = base64.b32encode(SECRET).decode().rstrip("=")
+PASSPHRASE = "isolated e2e backup"
+
+
+def rfc6238(at):
+    """The code for SECRET at Unix time ``at`` as the test's link sets it up: SHA-256, 8 digits, 30 s."""
+    digest = hmac.new(SECRET, struct.pack(">Q", int(at) // 30), hashlib.sha256).digest()
+    offset = digest[-1] & 0x0F
+    return "%08d" % ((struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 10**8)
+
+
+def leaks(data):
+    """Whether ``data`` holds SECRET in the clear: raw, as Base32 in any case, or base64url."""
+    return (SECRET in data or SETUP_KEY.encode() in data.upper()
+            or base64.urlsafe_b64encode(SECRET).rstrip(b"=") in data)
+
+
+def snapshot(path):
+    """What any write to ``path`` changes, even a write of the same bytes."""
+    return path.read_bytes(), path.stat().st_mtime_ns
 
 
 def daemon_main(root):
@@ -62,13 +87,20 @@ def client_main(stage, root, device_path):
 
     assert os.geteuid() != 0, "the HID client must run as the desktop user"
 
-    def cli(*args, expected=0):
+    def cli(*args, expected=0, stdin=""):
         result = subprocess.run(
             [sys.executable, str(REPO / "bin/localpasskey"), "--socket", str(root / "control.sock"), *args],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+            input=stdin, capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == expected, result.stdout + result.stderr
-        return result.stdout
+        assert not leaks((result.stdout + result.stderr).encode()), "the CLI printed the setup key"
+        return result.stdout if expected == 0 else result.stderr  # a failure is checked by its message
+
+    def show(code_id):
+        """Check the code the CLI prints against RFC 6238 at the daemon's time, on either side of a step."""
+        before = time.time()
+        shown = cli("totp", "code", code_id).strip()
+        assert shown in (rfc6238(before), rfc6238(time.time())), "the code is not the RFC 6238 one"
 
     assert device_path in cli("status")
     if stage == "delete":
@@ -86,6 +118,49 @@ def client_main(stage, root, device_path):
         assert "Restored 3 passkeys." in cli("restore", "--all", "--yes")
         assert len(json.loads(cli("list", "--json"))) == 3
         print("CLI status/list/delete/trash/restore: OK")
+        return
+    if stage == "totp":
+        assert rfc6238(59) == "46119246", "the test's own RFC 6238 code is wrong"
+        link = f"otpauth://totp/Example:alice@example.com?secret={SETUP_KEY}&issuer=Example&algorithm=SHA256&digits=8"
+        # Pasted on stdin, which is no terminal here; never on the command line.
+        assert "Saved the authenticator code for example.com." in cli(
+            "totp", "add", "--site", "example.com", stdin=f"{link}\ny\n")
+        [code] = json.loads(cli("totp", "list", "--json"))
+        assert {key: code[key] for key in ("site", "issuer", "account", "algorithm", "digits", "period", "deleted")} == {
+            "site": "example.com", "issuer": "Example", "account": "alice@example.com",
+            "algorithm": "SHA256", "digits": 8, "period": 30, "deleted": None}, code
+        show(code["id"])
+        assert "without asking" in cli("totp", "settings", "--require-password", "no")
+        assert "without asking" in cli("totp", "settings")  # stays off: totp-denied turns it on
+        assert "Moved 1 authenticator code to the trash." in cli("totp", "delete", code["id"], "--yes")
+        assert json.loads(cli("totp", "list", "--json")) == []
+        [trashed] = json.loads(cli("totp", "list", "--trash", "--json"))
+        assert trashed["id"] == code["id"] and trashed["deleted"]
+        assert "Restored 1 authenticator code." in cli("totp", "restore", code["id"], "--yes")
+        assert json.loads(cli("totp", "list", "--json")) == [code]
+        # Without a terminal, getpass reads the passphrases from stdin.
+        backup = root / "client" / "codes.lpkbackup"
+        assert f"Exported 3 passkeys and 1 authenticator code to {backup}." in cli(
+            "export", str(backup), stdin=f"{PASSPHRASE}\n{PASSPHRASE}\n")
+        assert not leaks(backup.read_bytes()), "the backup holds the setup key in the clear"
+        cli("totp", "delete", code["id"], "--yes")
+        assert "Permanently deleted the authenticator code for example.com." in cli(
+            "totp", "purge", code["id"], stdin="example.com\n")
+        assert json.loads(cli("totp", "list", "--json")) == json.loads(cli("totp", "list", "--trash", "--json")) == []
+        assert "Imported 1 authenticator code." in cli("import", str(backup), stdin=f"{PASSPHRASE}\ny\n")
+        assert json.loads(cli("totp", "list", "--json")) == [code]  # the same ID, labels and parameters
+        show(code["id"])
+        print("CLI authenticator codes add/list/code/settings/trash/restore/purge/export/import: OK")
+        return
+    if stage == "totp-denied":
+        [code] = json.loads(cli("totp", "list", "--json"))
+        show(code["id"])  # the password is off: no dialog to deny
+        assert "password is needed" in cli("totp", "settings", "--require-password", "yes")  # never asks
+        assert "not shown: authentication denied" in cli("totp", "code", code["id"], expected=1)
+        assert "not changed: authentication denied" in cli(
+            "totp", "settings", "--require-password", "no", expected=1)
+        assert "password is needed" in cli("totp", "settings")
+        print("totp-denied: a denied password shows no code and keeps it required: OK")
         return
 
     deadline = time.monotonic() + 5
@@ -204,8 +279,11 @@ def run(user):
         (root / "verdict").chmod(0o600)
         command = [sys.executable, "-m", "tests.e2e_isolated"]
         env = {key: value for key, value in os.environ.items() if key not in ("NOTIFY_SOCKET", "JOURNAL_STREAM")}
+        # The client cannot read the daemon's state, so the code stages' files are checked here.
+        credentials = root / "state" / "users" / str(account.pw_uid) / "credentials.json"
+        codes = credentials.with_name("totp.json")
         try:
-            for stages in (("register", "denied", "cancelled"), ("restart", "delete")):
+            for stages in (("register", "denied", "cancelled"), ("restart", "delete", "totp", "totp-denied")):
                 with (root / "daemon.log").open("a") as log:
                     process = subprocess.Popen(
                         [*command, "--daemon", str(root)], cwd=REPO, env=env,
@@ -215,7 +293,10 @@ def run(user):
                         device = ready(process, root)
                         print(f"Isolated device: {device}", flush=True)
                         for stage in stages:
-                            (root / "verdict").write_text({"denied": "denied", "cancelled": "wait"}.get(stage, "approved"))
+                            (root / "verdict").write_text(
+                                {"denied": "denied", "totp-denied": "denied", "cancelled": "wait"}.get(stage, "approved"))
+                            if stage == "totp":
+                                passkeys = snapshot(credentials)
                             client = subprocess.Popen(
                                 [*command, "--client", stage, "--root", str(root), "--device", device],
                                 cwd=REPO, env=env, user=account.pw_uid, group=account.pw_gid,
@@ -229,6 +310,11 @@ def run(user):
                                 assert client.returncode == 0, f"{stage} client exited {client.returncode}"
                             finally:
                                 stop(client)
+                            if stage.startswith("totp"):
+                                assert snapshot(credentials) == passkeys, f"{stage} wrote credentials.json"
+                                assert codes.stat().st_mode & 0o777 == 0o600
+                                assert not leaks(codes.read_bytes()), "totp.json holds the setup key in the clear"
+                                assert not leaks((root / "daemon.log").read_bytes()), "the daemon logged the setup key"
                     finally:
                         stop(process)
                     assert process.returncode == 0, f"daemon exited {process.returncode}"
@@ -240,14 +326,16 @@ def run(user):
                 print((root / "daemon.log").read_text(), file=sys.stderr)
             raise
     assert not root.exists(), "temporary credential state was not removed"
-    print("OK: registration, signatures, denial, cancellation, restart persistence, CLI deletion, and cleanup.")
+    print("OK: registration, signatures, denial, cancellation, restart persistence, CLI deletion, "
+          "authenticator codes, and cleanup.")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--user", help="desktop user for the unprivileged client")
     parser.add_argument("--daemon", type=Path, help=argparse.SUPPRESS)
-    parser.add_argument("--client", choices=("register", "denied", "cancelled", "restart", "delete"), help=argparse.SUPPRESS)
+    parser.add_argument("--client", choices=("register", "denied", "cancelled", "restart", "delete", "totp", "totp-denied"),
+                        help=argparse.SUPPRESS)
     parser.add_argument("--root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--device", help=argparse.SUPPRESS)
     args = parser.parse_args()
