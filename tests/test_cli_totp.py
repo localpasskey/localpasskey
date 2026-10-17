@@ -460,6 +460,59 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn(f"Exported 0 passkeys to {path}.", out)
 
+    def test_hostile_labels_come_out_printable_only(self):
+        hostile = "Evil\x1b]0;pwned\x07\u202eCo\u2066\r\x9b31m\u200b"
+        shown = []
+
+        def run(*args, **kwargs):
+            result = self.run_cli(*args, **kwargs)
+            shown.extend((result[1], result[2], *self.prompts))
+            return result
+
+        # The service refuses such a site, so only totp.json itself can hold one.
+        planted = self.store_code(site="ex\u202eample.com\x1b[2J", issuer=hostile, account=hostile)
+        code, out, err = run("totp", "add", "-y", "--site", "", "--issuer", hostile, "--account", hostile,
+                             stdin=KEY + "\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("Saved the authenticator code for Evil]0;pwnedCo31m.", out)
+        code, out, err = run("totp", "edit", planted.id.hex()[:8], "--account", hostile)
+        self.assertEqual(code, 0, err)
+        self.assertIn("Changed the authenticator code for example.com[2J.", out)
+
+        code, out, err = run("totp", "code", "evil")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("2 authenticator codes match 'evil'", err)
+        self.assertIn("ample.com", err, "the candidates are listed on stderr, escapes blanked out")
+
+        path = os.path.join(self.tmp, "codes.lpkbackup")
+        code, out, err = run("export", path, passphrases=[self.PASSPHRASE] * 2)
+        self.assertEqual(code, 0, err)
+        self.assertIn("ample.com", out)
+
+        # A backup with hostile labels straight from a file: the plan's two tables must blank them.
+        def record(**over):
+            entry = TotpEntry(id=os.urandom(16), sealed_secret=b"", issuer=hostile, account=hostile,
+                              created=1700000000.0, **{k: v for k, v in over.items() if k != "secret"})
+            return {**code_record(entry, os.urandom(20)), **({"secret": over["secret"]} if "secret" in over else {})}
+
+        inpath = os.path.join(self.tmp, "import.lpkbackup")
+        with open(inpath, "wb") as stream:
+            stream.write(transfer.export_backup([], self.PASSPHRASE, [
+                record(), record(site="ev\u202eil.example\x1b"), record(secret="1")]))
+        code, out, err = run("import", inpath, passphrases=[self.PASSPHRASE], typed=["n"])
+        self.assertEqual(code, 1, err)
+        for reason in ("invalid site", "not a valid setup key"):
+            self.assertIn(reason, out)
+        self.assertEqual(self.prompts[-1], "Import this authenticator code? [y/N] ")
+
+        self.fixture.store.totp_remove(self.fixture.uid, self.fixture.name, [planted.id])
+        code, out, err = run("totp", "purge", planted.id.hex()[:8], typed=["EXAMPLE.COM[2J"])
+        self.assertEqual(code, 0, err)
+        self.assertTrue(self.prompts[0].startswith('Type "example.com[2J" to permanently delete'))
+        self.assertIn("Permanently deleted the authenticator code for example.com[2J.", out)
+        for text in shown:
+            self.assertTrue(text.replace("\n", "").isprintable(), repr(text))
+
 
 class CliTotpProcessTests(unittest.TestCase):
     def test_add_from_a_pipe_and_list(self):
