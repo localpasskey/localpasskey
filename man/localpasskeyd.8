@@ -48,6 +48,20 @@ same site; for sign-ins without a user name the browser shows an account
 chooser. Passkeys are device-bound: they are not synchronised, and they leave
 the computer only in an export you ask for and approve; see
 .BR localpasskey (1).
+.PP
+The daemon also keeps authenticator codes (TOTP, RFC 6238) for each user,
+with their setup keys sealed like private keys, and computes the current
+codes with its own clock. A setup key leaves the daemon only in an approved
+export. Showing codes needs the user's password by default, through the
+.B org.localpasskey.totp
+action. A process that passes that dialog is unlocked: it may read codes
+without a dialog until it has made no code request for 5 minutes, asks to
+lock again, or exits. Unlocks are kept in memory only, so restarting the
+daemon locks every process. Root is always unlocked. A user can turn the
+password off for their own codes, which needs
+.BR org.localpasskey.manage ;
+then any of their processes can read their codes. A user can have up to 4096
+authenticator codes (including trashed ones), apart from the passkey limit.
 .SH OPTIONS
 .TP
 .BI \-\-config " file"
@@ -87,7 +101,8 @@ the USB IDs of the virtual device.
 turns all desktop notifications on or off;
 .B activity_notifications
 controls the ones shown when a passkey is saved, used, moved to the trash,
-permanently deleted, exported or imported, as opposed
+permanently deleted, exported or imported, or an authenticator code is
+added, moved to the trash, permanently deleted, exported or imported, as opposed
 to those about declined, timed-out or failed requests.
 .TP
 .I /var/lib/localpasskey/users/UID/credentials.json
@@ -100,20 +115,42 @@ Back up both files together, or neither.
 A hash of that user's PIN, encrypted with the same master key, and the
 number of attempts left. Present only while a PIN is set.
 .TP
+.I /var/lib/localpasskey/users/UID/totp.json
+That user's authenticator codes, including those in the trash, and whether
+showing them needs the password. Readable by root only; setup keys are
+encrypted with the same master key and bound to the uid. Present once the
+user adds a code. Older versions of the daemon ignore this file.
+.TP
 .I /usr/share/polkit-1/actions/org.localpasskey.policy
 polkit actions
 .B org.localpasskey.authenticate
 (create or use a passkey),
 .B org.localpasskey.manage
-(move passkeys to the trash, restore or permanently delete them, import
-passkeys, and set or remove the PIN) and
+(move passkeys and authenticator codes to the trash, restore or permanently
+delete them, add or change codes, import, set or remove the PIN, and stop
+asking for the password before showing codes),
 .B org.localpasskey.export
-(export passkeys with their private keys).
+(export passkeys with their private keys and codes with their setup keys)
+and
+.B org.localpasskey.totp
+(show authenticator codes).
 .SH SECURITY
 Approving the dialog is the only thing that stops a website from using
 your passkeys, so do not grant
 .B org.localpasskey.authenticate
 without authentication in polkit rules.
+.B org.localpasskey.totp
+is the same for authenticator codes.
+.PP
+While a process has codes unlocked, or a user has turned the password off,
+any process running as that user can read the current codes (not the setup
+keys) without a dialog; an unlock also lets that process add, change, trash
+and restore codes without asking, but never delete one permanently. Root and
+anyone with
+.I master.key
+and the store can read every setup key. A backup of
+.I /var/lib/localpasskey
+holds the codes too, and is as sensitive as the passkeys.
 .SH SEE ALSO
 .BR localpasskey (1),
 .BR localpasskey-bridge (1),
