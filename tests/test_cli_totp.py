@@ -397,6 +397,12 @@ class CliTotpTests(unittest.TestCase):
         self.assertTrue(err.endswith(" (use --no-codes to export only passkeys)\n"), err)
         self.assertFalse(os.path.exists(path))
 
+    def test_no_hint_when_a_code_was_only_deleted_meanwhile(self):
+        error = cli.ServiceError("no authenticator code with ID " + "ab" * 16)
+        with self.assertRaises(cli.ServiceError) as caught, cli._suggest_no_codes(True):
+            raise error
+        self.assertIs(caught.exception, error)  # a retry just works; the codes are readable
+
     def test_export_by_id_selects_no_codes(self):
         self.store_code()
         self.fixture.store._totp_path(self.fixture.uid).write_text("{not json")

@@ -307,7 +307,8 @@ def _suggest_no_codes(with_codes):
     try:
         yield
     except ServiceError as e:
-        if with_codes and ("totp.json" in str(e) or "authenticator code" in str(e)):
+        # Only a code that cannot be read; one deleted meanwhile is gone, and a retry just works.
+        if with_codes and ("totp.json" in str(e) or "cannot be decrypted" in str(e)):
             raise CliError(f"{e} (use --no-codes to export only passkeys)") from None
         raise
 
