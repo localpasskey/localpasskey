@@ -304,12 +304,17 @@ localpasskey totp settings                # is a password needed to show codes?
 
 `totp add` reads the link or setup key without echoing it, never from the
 command line. Without `--site` it asks for the website when run in a
-terminal, suggesting the issuer when that is a host name; a full address
-such as `https://github.com/login` is saved as `github.com`. It then shows
-what it will save and asks for your password. `totp code`
+terminal, suggesting the issuer when that is a host name; a website given with a
+scheme, path or port, such as `https://github.com/login` or
+`github.com:443`, is saved as its host name, `github.com`, and `--site`
+selectors match the same way. It then shows what it will save and asks you
+to confirm, then for your password. When the link or setup key comes from
+standard input, the confirmation is read from the terminal; without one, add
+`-y` to save it without asking. `totp code`
 prints only the code, and how long it stays valid on stderr. Counter-based
-(HOTP) codes, Steam codes and Google Authenticator's `otpauth-migration`
-export links are not supported.
+(HOTP) codes, Steam codes (`steam://` links and links with `encoder=steam`)
+and Google Authenticator's `otpauth-migration` export links are not
+supported.
 
 In the window, the **Authenticator Codes** tab next to *Passkeys* lists your
 codes by website and account. Opening the tab asks for your password once;

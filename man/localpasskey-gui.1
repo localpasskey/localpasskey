@@ -72,7 +72,13 @@ which reads the clipboard only when clicked. The dialog checks it as you
 type, fills in the issuer and account from a link, and suggests the
 website. A full address typed as the website, such as
 .BR https://github.com/login ,
-is saved as its host name. After saving, the window clears the clipboard if
+is saved as its host name, and so is one with a path or port such as
+.BR github.com:443 .
+Steam codes
+.RB ( steam://
+links and links with
+.BR \%encoder=steam )
+are not supported. After saving, the window clears the clipboard if
 it still holds the pasted text. The key field hides what you type unless you
 click
 .BR Show ;

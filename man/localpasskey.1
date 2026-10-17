@@ -230,20 +230,33 @@ replace them. Without
 .BR \-\-site ,
 it asks for the website when standard input is a terminal, suggesting one
 when the issuer looks like a host name, and otherwise takes that suggestion,
-if any. A full address, typed or given with
+if any. A website with a scheme, path, port or user name, typed or given with
 .BR \-\-site ,
 is saved as its host name:
 .B https://github.com/login
-becomes
+and
+.B github.com:443
+become
 .BR github.com .
 The command shows what it will save but never the setup key, and asks for
 confirmation (skip with
 .BR \-y )
-before polkit asks for your password. Counter-based (HOTP) codes and
+before polkit asks for your password. When the setup key comes from standard
+input, the confirmation is read from the terminal; when there is none, the
+command stops before saving anything unless
+.B \-y
+is given. Counter-based (HOTP) codes, Steam codes
+.RB ( steam://
+links and links with
+.BR \%encoder=steam ),
+links with any other
+.B encoder
+and
 .B otpauth\-migration
 links are refused. The website is what
 .B \-\-site
-selectors match; it may be left empty.
+selectors match, after the same reduction to a host name; it may be left
+empty.
 .TP
 .BI "totp code " query
 Print the current code of one authenticator code on standard output, and how
