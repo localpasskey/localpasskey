@@ -220,10 +220,17 @@ Save an authenticator code. Paste the
 link or the setup key (Base32; spaces, dashes and lower case are fine) that
 the site shows next to its QR code. The command reads it from the terminal
 without echoing it, or as one line from standard input, never from the
-command line. It fills in the issuer and account from a link, asks for the
-website (suggesting one when the issuer looks like a host name) unless
-.B \-\-site
-is given, shows what it will save but never the setup key, and asks for
+command line. It fills in the issuer and account from a link. Without
+.BR \-\-site ,
+it asks for the website when standard input is a terminal, suggesting one
+when the issuer looks like a host name, and otherwise takes that suggestion,
+if any. A full address, typed or given with
+.BR \-\-site ,
+is saved as its host name:
+.B https://github.com/login
+becomes
+.BR github.com .
+The command shows what it will save but never the setup key, and asks for
 confirmation (skip with
 .BR \-y )
 before polkit asks for your password. Counter-based (HOTP) codes and
