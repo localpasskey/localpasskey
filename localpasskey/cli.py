@@ -503,7 +503,7 @@ def cmd_totp_code(args):
         raise CliError(f"no authenticator code with ID {matches[0]['id']}")  # deleted during the dialog
     [code] = reply["codes"]
     print(code["code"])
-    print(f"valid for {math.ceil(code['remaining'])} more seconds", file=sys.stderr)
+    print(f"valid for {math.ceil(code['remaining'])} more seconds", file=sys.stderr)  # an int or, from newer daemons, a float
     return 0
 
 

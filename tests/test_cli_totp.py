@@ -191,6 +191,14 @@ class CliTotpTests(unittest.TestCase):
         self.assertIn("no authenticator code matches 'nothing'", err)
         self.assertEqual(len(self.checks()), 3)
 
+    def test_code_rounds_a_fractional_remaining_time_up(self):
+        self.store_code()
+        for remaining, shown in ((12.001, 13), (12, 12), (0.4, 1)):
+            reply = {"codes": [{"id": self.codes()[0].id.hex(), "code": "123456", "remaining": remaining}]}
+            with self.subTest(remaining=remaining), patch("localpasskey.cli._ask", return_value=reply):
+                code, out, err = self.run_cli("totp", "code", "github")
+                self.assertEqual((code, out, err), (0, "123456\n", f"valid for {shown} more seconds\n"))
+
     def test_edit(self):
         entry = self.store_code()
         code, out, err = self.run_cli("totp", "edit", entry.id.hex()[:8], "--site", "", "--account", "hubot")
