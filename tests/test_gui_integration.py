@@ -610,10 +610,12 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(self.window.message.text.text(), "Your password is needed to show them.")
         self.assertTrue(self.window.message.button.isVisible())
         self.assertEqual(self.window.statusBar().currentMessage(), "")
+        self.assertEqual(self.window.count_label.text(), "3 authenticator codes · locked")
         self.server.verifier.verdict = Verdict.APPROVED
         QTest.mouseClick(self.window.message.button, Qt.MouseButton.LeftButton)
         self.wait_for(lambda: len(self.window._values) == 3)
         self.assertEqual(self.window.model.rowCount(), 3)
+        self.assertEqual(self.window.count_label.text(), "3 authenticator codes")
         self.assertFalse(self.window.message.button.isVisible())
 
     @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
@@ -628,6 +630,7 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(self.window.model.rowCount(), 0)
         self.assertEqual(self.window.message.title.text(), "Authenticator codes are locked")
         self.assertEqual(self.window.statusBar().currentMessage(), "")
+        self.assertEqual(self.window.count_label.text(), "3 authenticator codes · locked")
 
     def test_countdown_ticks_and_a_finished_code_is_fetched_again(self):
         self.open_codes()

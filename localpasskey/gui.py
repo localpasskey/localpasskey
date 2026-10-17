@@ -1249,7 +1249,6 @@ class Window(QMainWindow):
             return
         status, creds, pin, self._code_count = result
         self.show_pin_state(pin)
-        self.count_label.setText((plural_codes if codes else plural)(len(creds)))
         self.service_label.setText("Service running")
         self.service_label.setToolTip(
             f"localpasskeyd {status['version']} · virtual security key {status.get('device') or 'missing'}"
@@ -1259,6 +1258,15 @@ class Window(QMainWindow):
             self._rebuild()
             if any(entry["id"] not in self._values for entry in creds if codes):
                 self._fetch_codes()  # a new code has no value yet
+        self._show_count()
+
+    def _show_count(self):
+        if self._creds is None:
+            return
+        if not self._codes_tab:
+            self.count_label.setText(plural(len(self._creds)))
+        else:  # locked, the list is empty but the count still says what is there
+            self.count_label.setText(plural_codes(len(self._creds)) + ("" if self._unlocked else " · locked"))
 
     def show_pin_state(self, pin):
         """The lock in the status bar: closed when a PIN is set, red when it is locked."""
@@ -1290,6 +1298,7 @@ class Window(QMainWindow):
         self.proxy.setSourceModel(self.model)
         self._size_columns()  # reattaching the model reset the header's sections
         self._restore(selected)
+        self._show_count()  # an unlock or lock rebuilds without a reload
 
     def _size_columns(self):
         header = self.table.header()
