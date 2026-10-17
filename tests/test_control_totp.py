@@ -3,6 +3,7 @@ import json
 import os
 import pwd
 import tempfile
+import threading
 import time
 import unittest
 import xml.etree.ElementTree as ET
@@ -14,7 +15,7 @@ from localpasskey import cose, totp
 from localpasskey.control import UNLOCK_IDLE, ControlError, ControlServer
 from localpasskey.ctap2 import Verdict
 from localpasskey.polkit import ACTION_AUTHENTICATE, ACTION_EXPORT, ACTION_MANAGE, ACTION_TOTP
-from localpasskey.store import Credential, CredentialStore, StoreError, b64encode
+from localpasskey.store import Credential, CredentialStore, StoreError, TotpEntry, b64encode
 from tests.test_control import FakeNotifier, FakePolkit
 
 SECRET = bytes(range(1, 21))  # RFC 6238's SHA1 test key would also be its own oracle
@@ -605,6 +606,78 @@ class TotpControlTests(unittest.TestCase):
             reply = self.raw({"command": "import", "credentials": [], "codes": records, "dry_run": True})
             with self.subTest(created=created):
                 self.assertAlmostEqual(reply["imported_codes"][0]["created"], time.time(), delta=5)
+
+    # -- untrusted text, logs and locks -----------------------------------
+
+    def test_hostile_labels_reach_dialogs_and_notifications_printable_only(self):
+        hostile = "Bad\x1b[31m\u202eCo\u2066\x07"
+        added = self.handle({"action": "add", "entry": self.entry(site="", issuer=hostile)})["added"]
+        self.handle({"action": "code", "ids": [added["id"]], "ask": True})
+        self.handle({"action": "delete", "all": True})
+        self.handle({"action": "purge", "all": True})
+        # site is validated on add, so a hostile one can only come from the file itself.
+        entry_id = os.urandom(16)
+        self.store.totp_add(self.uid, self.name, TotpEntry(
+            id=entry_id, sealed_secret=self.store.seal(self.uid, b"totp\0" + entry_id, SECRET),
+            site="ex\u202eample.com\x1b", issuer=hostile))
+        self.handle({"action": "code", "ids": [entry_id.hex()], "ask": True})
+        messages = [check[2] for check in self.polkit.checks]
+        self.assertIn("Save an authenticator code for Bad[31mCo on this computer?", messages)
+        self.assertIn("Show the authenticator code for Bad[31mCo?", messages)
+        self.assertIn("Show the authenticator code for example.com?", messages)
+        self.assertTrue(any(m.startswith("Permanently delete the authenticator code for Bad[31mCo?")
+                            for m in messages))
+        notes = [text for note in self.notifier.notes for text in note[:2]]
+        self.assertIn("The authenticator code for Bad[31mCo was added to this computer.", notes)
+        for text in messages + notes:
+            self.assertTrue(text.isprintable(), text)
+
+    def test_no_seed_or_code_is_logged(self):
+        with self.assertLogs("localpasskey", level="DEBUG") as logs:
+            self.add(digits=8)
+            self.unlock()
+            [code] = self.handle({"action": "code", "all": True})["codes"]
+            [asked] = self.handle({"action": "code", "all": True, "ask": True})["codes"]
+            export = self.raw({"command": "export", "all": True, "codes": True})
+        self.assertEqual(len(export["codes"]), 1)
+        text = "\n".join(logs.output)
+        for secret in (totp.encode_secret(SECRET), base64.b32encode(SECRET).decode(), SECRET.hex(),
+                       b64encode(SECRET), base64.b64encode(SECRET).decode(), code["code"], asked["code"]):
+            self.assertNotIn(secret, text)
+
+    def test_dialogs_run_with_the_store_lock_free(self):
+        server, store = self.server, self.store
+        held = []
+
+        class LockCheckingPolkit(FakePolkit):
+            def check(self, subject, action_id, message, cancelled=None, timeout=120.0):
+                # The store lock is an RLock: only another thread can tell whether it is held.
+                def probe():
+                    for lock in (store._lock, server._unlocks_lock):
+                        if lock.acquire(timeout=0):
+                            lock.release()
+                        else:
+                            held.append(message)
+                thread = threading.Thread(target=probe)
+                thread.start()
+                thread.join()
+                return super().check(subject, action_id, message, cancelled, timeout)
+
+        self.polkit = self.server.verifier = LockCheckingPolkit(Verdict.APPROVED)
+        added = self.handle({"action": "add", "entry": self.entry()})["added"]
+        self.handle({"action": "update", "id": added["id"], "account": "new"})
+        self.handle({"action": "code", "all": True, "ask": True})
+        self.handle({"action": "unlock"})
+        self.handle({"action": "lock"})
+        self.raw({"command": "export", "all": True, "codes": True})
+        self.raw({"command": "import", "credentials": [], "codes": [self.code_record()]})
+        self.handle({"action": "delete", "all": True})
+        self.handle({"action": "restore", "all": True})
+        self.handle({"action": "delete", "ids": [added["id"]]})
+        self.handle({"action": "purge", "all": True})
+        self.handle({"action": "settings", "require_auth": False})
+        self.assertEqual(len(self.polkit.checks), 11)
+        self.assertEqual(held, [])
 
 
 if __name__ == "__main__":
