@@ -999,7 +999,8 @@ class Window(QMainWindow):
         self._timer = QTimer(self, interval=REFRESH_MS, timeout=self.refresh)
         self._timer.start()
         self._tick = QTimer(self, interval=TICK_MS, timeout=self._on_tick)
-        self._clipboard_timer = QTimer(self, singleShot=True, interval=COPY_CLEAR_MS, timeout=self._expire_copied)
+        self._clipboard_timer = QTimer(self, singleShot=True, timerType=Qt.TimerType.PreciseTimer,
+                                       timeout=self._expire_copied)
         self._show(None)
         self.search.setFocus()  # typing searches at once, as before the tab bar came first
         self.refresh()
@@ -1444,13 +1445,19 @@ class Window(QMainWindow):
         data.setData("x-kde-passwordManagerHint", b"secret")  # Klipper and others keep it out of their history
         QGuiApplication.clipboard().setMimeData(data)
         self._copied, self._copied_until = value[0], time.monotonic() + COPY_CLEAR_MS / 1000
-        self._clipboard_timer.start()
+        self._clipboard_timer.start(COPY_CLEAR_MS)
         self.statusBar().showMessage(f"Code copied; the clipboard is cleared in {COPY_CLEAR_MS // 1000} s", 4000)
 
     def _expire_copied(self, now=False):
         """Clear a copied code once its time is up, unless something else was copied since."""
-        if self._copied is None or (not now and time.monotonic() < self._copied_until):
+        if self._copied is None:
             return
+        left = self._copied_until - time.monotonic()
+        if not now and left > 0:
+            if not self._clipboard_timer.isActive():  # it fired early: wait out the rest
+                self._clipboard_timer.start(max(1, round(left * 1000 + 0.5)))
+            return
+        self._clipboard_timer.stop()
         clipboard = QGuiApplication.clipboard()
         if clipboard.text() == self._copied:
             clipboard.clear()

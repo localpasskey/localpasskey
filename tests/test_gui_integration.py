@@ -686,6 +686,31 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(clipboard.text(), "")
         self.assertFalse(self.server._unlocks)
 
+    def test_the_clipboard_timer_clears_the_code_by_itself(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.select("github.com")
+        self.assertEqual(self.window._clipboard_timer.timerType(), Qt.TimerType.PreciseTimer)
+        clipboard = self.app.clipboard()
+        with patch.object(gui, "COPY_CLEAR_MS", 150):
+            self.window.copy_code()
+            self.assertEqual(clipboard.text(), self.expected("github.com"))
+            self.wait_for(lambda: clipboard.text() == "")
+        self.assertIsNone(self.window._copied)
+
+    def test_the_clipboard_timer_fired_early_waits_for_the_time_left(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.select("github.com")
+        clipboard = self.app.clipboard()
+        with patch.object(gui, "COPY_CLEAR_MS", 50):
+            self.window.copy_code()
+            self.window._copied_until = time.monotonic() + 0.4  # as if the timer ran fast
+            QTest.qWait(150)
+            self.assertEqual(clipboard.text(), self.expected("github.com"))
+            self.assertTrue(self.window._clipboard_timer.isActive(), "re-armed for the rest")
+            self.wait_for(lambda: clipboard.text() == "")
+
     def test_closing_the_window_locks_the_codes(self):
         self.open_codes()
         self.wait_for(lambda: self.window._unlocked)
