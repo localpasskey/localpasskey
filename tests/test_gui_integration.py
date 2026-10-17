@@ -637,6 +637,39 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(self.window.statusBar().currentMessage(), "")
         self.assertEqual(self.window.count_label.text(), "3 authenticator codes · locked")
 
+    @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
+    def test_the_trash_view_relocks_when_the_service_drops_the_unlock(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.window.trash_action.setChecked(True)
+        self.assertEqual(self.window._values, {}, "no old codes kept for the way back")
+        self.wait_for(lambda: not self.window._refreshing)
+        with self.server._unlocks_lock:
+            self.server._unlocks.clear()  # the idle relock while in the trash
+        self.window.refresh()
+        self.wait_for(lambda: not self.window._unlocked and not self.window._refreshing)
+        self.assertEqual(self.window.message.title.text(), "Authenticator codes are locked")
+        self.assertTrue(self.window.message.button.isVisible())
+
+    def test_leaving_the_trash_fetches_the_codes_again(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.window._values = {k: ("000000", until, p) for k, (_, until, p) in self.window._values.items()}
+        self.window.trash_action.setChecked(True)
+        self.wait_for(lambda: not self.window._refreshing)
+        self.window.trash_action.setChecked(False)
+        self.wait_for(lambda: self.window.model.rowCount() == 3 and len(self.window._values) == 3
+                      and not self.window._refreshing and not self.window._fetching)
+        self.assertEqual(self.code_cell("github.com"), gui.grouped(self.expected("github.com")))
+
+    def test_a_failed_refresh_forgets_the_codes(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        with patch.object(gui, "request", side_effect=ServiceUnavailable("gone")):
+            self.window.refresh()
+            self.wait_for(lambda: not self.window._refreshing)
+        self.assertEqual(self.window._values, {})
+
     def test_countdown_ticks_and_a_finished_code_is_fetched_again(self):
         self.open_codes()
         self.wait_for(lambda: len(self.window._values) == 3)

@@ -1210,6 +1210,7 @@ class Window(QMainWindow):
     def set_trash(self, on):
         """Show the trash instead of the live passkeys or codes."""
         self._trash = bool(on)
+        self._values = {}  # leaving the trash fetches them again, not minutes-old ones
         self._creds = None  # forces a rebuild when the new list arrives, even if both are empty
         self._selected_id = None
         self.refresh()
@@ -1219,7 +1220,7 @@ class Window(QMainWindow):
             self._refresh_again = True  # the running load may have read the store before a change
             return
         self._refreshing = True
-        trashed, codes = self._trash, self._codes_tab
+        trashed, codes, unlocked = self._trash, self._codes_tab, self._unlocked
 
         def load():
             status = request({"command": "status"})
@@ -1235,14 +1236,14 @@ class Window(QMainWindow):
             except Exception:
                 pin = None  # the lock just stays hidden; the list is what matters
             try:
-                code_count = request({"command": "totp", "action": "status"})["count"]
+                codes_status = request({"command": "totp", "action": "status"})
             except Exception:
-                code_count = None  # export then offers no codes
-            return status, creds, pin, code_count
+                codes_status = None  # export then offers no codes
+            return status, creds, pin, codes_status
 
-        self.tasks.run(load, lambda result, error: self._on_loaded(result, error, trashed, codes))
+        self.tasks.run(load, lambda result, error: self._on_loaded(result, error, trashed, codes, unlocked))
 
-    def _on_loaded(self, result, error, trashed=False, codes=False):
+    def _on_loaded(self, result, error, trashed=False, codes=False, unlocked=False):
         self._refreshing = False
         # A change, or a switch of view or tab, came in while loading.
         if self._refresh_again or trashed != self._trash or codes != self._codes_tab:
@@ -1250,6 +1251,7 @@ class Window(QMainWindow):
             self.refresh()
             return
         if error is not None:
+            self._values = {}
             self.count_label.setText("")
             self.service_label.setText("Service not running" if isinstance(error, ServiceUnavailable) else str(error))
             self.service_label.setToolTip(str(error))
@@ -1258,7 +1260,12 @@ class Window(QMainWindow):
                 self._creds = None
                 self._rebuild()
             return
-        status, creds, pin, self._code_count = result
+        status, creds, pin, codes_status = result
+        self._code_count = codes_status and codes_status["count"]
+        # Unlocked when the load began, and the service says no more: idle in the trash, or restarted.
+        if unlocked and self._unlocked and codes_status and not codes_status["unlocked"]:
+            self._lock_codes(tell=False)
+            self._creds = None  # rebuilds below into the locked state
         self.show_pin_state(pin)
         self.service_label.setText("Service running")
         self.service_label.setToolTip(
