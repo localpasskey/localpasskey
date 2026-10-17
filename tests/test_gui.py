@@ -151,5 +151,58 @@ class PinDialogTests(unittest.TestCase):
         self.assertEqual(self.dialog.feedback.text(), "PIN is valid")
 
 
+@unittest.skipIf(gui is None, "PyQt6 and QDarkStyle are not installed")
+class CodeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}):
+            cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.parent = QWidget()
+        self.addCleanup(self.parent.deleteLater)
+
+    def test_codes_are_grouped_and_hidden_until_known(self):
+        self.assertEqual(gui.grouped("123456"), "123 456")
+        self.assertEqual(gui.grouped("12345678"), "1234 5678")
+        entry = {"id": "ab", "site": "", "issuer": "Bank", "account": "Alice", "deleted": 5.0}
+        self.assertEqual([c.text() for c in gui.code_row(entry)], ["Bank", "Alice", gui.HIDDEN_CODE])
+        self.assertEqual(gui.code_row(entry, code="070818")[2].text(), "070 818")
+        self.assertEqual(gui.code_row(entry, trashed=True)[2].text(), gui.when(5.0))
+        self.assertEqual(gui.code_title({"site": "", "issuer": ""}), "Unknown website")
+        self.assertTrue(gui.matches(entry, "bank ali"))
+
+    def test_add_dialog_feedback_and_the_entry_it_sends(self):
+        dialog = gui.CodeDialog(self.parent)
+        cases = [
+            ("", "Paste the setup key or link the website shows"),
+            ("JBSW", "The setup key is too short"),
+            ("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP", "Counter-based (HOTP) codes are not supported"),
+            ("jbsw y3dp ehpk 3pxp", "Setup key is valid"),
+        ]
+        for text, shown in cases:
+            with self.subTest(text=text):
+                dialog.key.setText(text)
+                self.assertEqual(dialog.feedback.text(), shown)
+                self.assertEqual(dialog.save_button.isEnabled(), shown == "Setup key is valid")
+        self.assertFalse(dialog.note.isVisibleTo(dialog))
+        self.assertEqual(dialog.entry(), {"secret": "JBSWY3DPEHPK3PXP", "site": "", "issuer": "", "account": "",
+                                          "algorithm": "SHA1", "digits": 6, "period": 30})
+        dialog.key.setText("otpauth://totp/Big%20Corp:al?secret=JBSWY3DPEHPK3PXP&algorithm=SHA256&period=60")
+        self.assertEqual((dialog.site.text(), dialog.issuer.text(), dialog.account.text()), ("", "Big Corp", "al"))
+        self.assertTrue(dialog.note.isVisibleTo(dialog))
+        self.assertIn("SHA256 · 6 digits · every 60 s", dialog.note.text())
+        dialog.site.setText("a b")
+        self.assertFalse(dialog.save_button.isEnabled())
+
+    def test_edit_dialog_has_no_setup_key(self):
+        dialog = gui.CodeDialog(self.parent, {"site": "github.com", "issuer": "GitHub", "account": "octocat"})
+        self.assertFalse(dialog.key.isVisibleTo(dialog))
+        self.assertTrue(dialog.save_button.isEnabled())
+        self.assertEqual(dialog.feedback.text(), "")
+        dialog.account.setText(" octo ")
+        self.assertEqual(dialog.labels(), {"site": "github.com", "issuer": "GitHub", "account": "octo"})
+
+
 if __name__ == "__main__":
     unittest.main()

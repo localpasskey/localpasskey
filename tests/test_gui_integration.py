@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 try:
-    from PyQt6.QtCore import Qt, QTimer
+    from PyQt6.QtCore import QEvent, Qt, QTimer
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
@@ -14,7 +14,7 @@ try:
 except ImportError:
     gui = None
 
-from localpasskey import cose
+from localpasskey import cose, totp
 from localpasskey.client import ServiceUnavailable
 from localpasskey.clientpin import MAX_PIN_RETRIES, pin_hash
 from localpasskey.ctap2 import Verdict
@@ -523,6 +523,280 @@ class WindowTests(unittest.TestCase):
         self.wait_for(lambda: len(received) == 2)
         self.assertIsInstance(received[1][1], ZeroDivisionError)
         self.assertEqual(received[1][2], owner)
+
+
+@unittest.skipIf(gui is None, "PyQt6 and QDarkStyle are not installed")
+class CodesTabTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}):
+            cls.app = QApplication.instance() or QApplication([])
+
+    wait_for = WindowTests.wait_for
+    answer_dialog = WindowTests.answer_dialog
+    answer_delete = WindowTests.answer_delete
+    destructive = staticmethod(WindowTests.destructive)
+
+    def setUp(self):
+        self.environment = patch.dict(os.environ)
+        self.environment.start()
+        self.server, self.tmp = start_backend()
+        self.server.verifier = FakePolkit(Verdict.APPROVED)
+        self.uid = os.getuid()
+        self.username = pwd.getpwuid(self.uid).pw_name
+        self.window = gui.Window()
+        self.window._timer.stop()
+        self.window.show()
+        self.wait_for(lambda: not self.window._refreshing)
+
+    tearDown = WindowTests.tearDown
+
+    def open_codes(self):
+        self.window.tabs.setCurrentIndex(1)
+        self.wait_for(lambda: not self.window._unlocking and not self.window._refreshing
+                      and not self.window._fetching)
+
+    def expected(self, site):
+        entry = next(e for e in self.server.store.totp_entries(self.uid, self.username) if e.site == site)
+        return totp.code(self.server.store.totp_unseal(self.uid, entry), entry.algorithm, entry.digits,
+                         entry.period)[0]
+
+    def code_cell(self, site):
+        row = next(r for r in range(self.window.model.rowCount()) if self.window.model.item(r, 0).text() == site)
+        return self.window.model.item(row, 2).text()
+
+    def select(self, title):
+        row = next(r for r in range(self.window.proxy.rowCount())
+                   if self.window.proxy.index(r, 0).data(Qt.ItemDataRole.DisplayRole) == title)
+        self.window.table.setCurrentIndex(self.window.proxy.index(row, 0))
+
+    def test_the_tab_unlocks_shows_the_codes_and_leaving_locks_them(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.assertEqual([m[1:] for m in self.server.verifier.checks],
+                         [("org.localpasskey.totp", "Show the authenticator codes stored on this computer?")])
+        self.assertEqual([self.window.model.headerData(i, Qt.Orientation.Horizontal) for i in range(3)],
+                         list(gui.CODE_COLUMNS))
+        self.assertEqual(self.window.count_label.text(), "3 authenticator codes")
+        self.assertEqual(self.code_cell("github.com"), gui.grouped(self.expected("github.com")))
+        self.assertEqual(self.code_cell("Example Bank"), gui.grouped(self.expected("")))  # issuer stands in
+        self.assertEqual(len(self.code_cell("Example Bank")), 9, "8 digits, grouped")
+        self.select("github.com")
+        self.assertIs(self.window.side.currentWidget(), self.window.code_details)
+        self.assertEqual(self.window.code_details.code.text(), gui.grouped(self.expected("github.com")))
+        self.assertEqual(self.window.code_details.kind.text(), "SHA1 · 6 digits · every 30 s")
+        self.assertRegex(self.window.code_details.countdown.text(), r"^Changes in \d+ s$")
+        self.assertTrue(self.window.code_menu.menuAction().isVisible())
+        self.assertFalse(self.window.passkey_menu.menuAction().isVisible())
+        self.assertFalse(self.window.copy_action.isEnabled(), "Ctrl+C belongs to Copy Code here")
+        self.assertTrue(self.server._unlocks)
+
+        self.window.tabs.setCurrentIndex(0)
+        self.wait_for(lambda: not self.server._unlocks and not self.window._refreshing)
+        self.assertEqual(self.window._values, {})
+        self.assertEqual(self.window.model.rowCount(), 7)
+        self.assertEqual(self.window.count_label.text(), "7 passkeys")
+        self.assertTrue(self.window.passkey_menu.menuAction().isVisible())
+        self.assertFalse(self.window.copy_code_action.isEnabled())
+        self.assertTrue(self.window.copy_action.isEnabled())
+
+    @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
+    def test_a_refused_unlock_stays_locked_quietly_until_unlock_is_clicked(self):
+        self.server.verifier.verdict = Verdict.DENIED
+        self.open_codes()
+        self.assertFalse(self.window._unlocked)
+        self.assertEqual(self.window.model.rowCount(), 0)
+        self.assertEqual(self.window.message.title.text(), "Authenticator codes are locked")
+        self.assertEqual(self.window.message.text.text(), "Your password is needed to show them.")
+        self.assertTrue(self.window.message.button.isVisible())
+        self.assertEqual(self.window.statusBar().currentMessage(), "")
+        self.server.verifier.verdict = Verdict.APPROVED
+        QTest.mouseClick(self.window.message.button, Qt.MouseButton.LeftButton)
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.assertEqual(self.window.model.rowCount(), 3)
+        self.assertFalse(self.window.message.button.isVisible())
+
+    @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
+    def test_the_service_locking_the_codes_shows_the_locked_state(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        with self.server._unlocks_lock:
+            self.server._unlocks.clear()  # the idle relock, or a restarted service
+        self.window._show_values({})
+        self.window._fetch_codes()
+        self.wait_for(lambda: not self.window._unlocked)
+        self.assertEqual(self.window.model.rowCount(), 0)
+        self.assertEqual(self.window.message.title.text(), "Authenticator codes are locked")
+        self.assertEqual(self.window.statusBar().currentMessage(), "")
+
+    def test_countdown_ticks_and_a_finished_code_is_fetched_again(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.select("github.com")
+        code, _, period = self.window._values[self.window._selected_id]
+        self.window._values[self.window._selected_id] = (code, time.monotonic() + 12.2, period)
+        with patch.object(self.window, "_fetch_codes") as fetch:
+            self.window._on_tick()
+        self.assertEqual(self.window.code_details.countdown.text(), "Changes in 12 s")
+        fetch.assert_not_called()
+        self.window._values[self.window._selected_id] = ("000000", time.monotonic() - 0.1, period)
+        self.window._on_tick()
+        self.wait_for(lambda: self.window._values[self.window._selected_id][1] > time.monotonic())
+        self.assertEqual(self.window._values[self.window._selected_id][0], self.expected("github.com"))
+
+    def test_an_inactive_window_blanks_the_codes_and_fetches_none(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.select("github.com")
+        with patch.object(self.window, "isActiveWindow", return_value=False):
+            self.window.changeEvent(QEvent(QEvent.Type.ActivationChange))
+            self.assertEqual(self.window._values, {})
+            self.assertEqual(self.code_cell("github.com"), gui.HIDDEN_CODE)
+            self.assertEqual(self.window.code_details.code.text(), gui.HIDDEN_CODE)
+            self.assertFalse(self.window.code_details.copy_button.isEnabled())
+            with patch.object(gui, "request") as asked:
+                self.window._fetch_codes()
+            asked.assert_not_called()
+        self.window.changeEvent(QEvent(QEvent.Type.ActivationChange))
+        self.wait_for(lambda: len(self.window._values) == 3)
+
+    def test_copy_code_is_marked_secret_and_cleared_only_if_still_there(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.select("github.com")
+        QTest.keyClick(self.window.table, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        clipboard = self.app.clipboard()
+        code = self.expected("github.com")
+        self.assertEqual(clipboard.text(), code)
+        self.assertEqual(bytes(clipboard.mimeData().data("x-kde-passwordManagerHint")), b"secret")
+        self.assertEqual(self.window.statusBar().currentMessage(), "Code copied; the clipboard is cleared in 30 s")
+        self.assertTrue(self.window._clipboard_timer.isActive())
+        self.window._expire_copied()  # focus-in before the 30 s are up
+        self.assertEqual(clipboard.text(), code)
+        self.window._copied_until = time.monotonic()
+        self.window._expire_copied()
+        self.assertEqual(clipboard.text(), "")
+        self.window.copy_code()
+        clipboard.setText("something else")
+        self.window._copied_until = time.monotonic()
+        self.window._expire_copied()
+        self.assertEqual(clipboard.text(), "something else")
+        self.window.copy_code()
+        self.window.shutdown()  # aboutToQuit: no waiting for the 30 s
+        self.assertEqual(clipboard.text(), "")
+        self.assertFalse(self.server._unlocks)
+
+    def test_closing_the_window_locks_the_codes(self):
+        self.open_codes()
+        self.wait_for(lambda: self.window._unlocked)
+        self.window.close()
+        self.assertFalse(self.window._unlocked)
+        self.assertFalse(self.server._unlocks)
+
+    def test_add_code_from_a_pasted_link_then_clears_the_clipboard(self):
+        link = "otpauth://totp/example.com:bob?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU&issuer=example.com&digits=8"
+        self.app.clipboard().setText(link)
+        seen = []
+
+        def fill(dialog):
+            seen.append(dialog)
+            self.assertEqual(dialog.key.echoMode(), gui.QLineEdit.EchoMode.Password)
+            self.assertFalse(dialog.save_button.isEnabled())
+            dialog.key.setText("not a key 0")
+            self.assertEqual(dialog.feedback.text(), "This is not a valid setup key")
+            self.assertFalse(dialog.save_button.isEnabled())
+            next(b for b in dialog.findChildren(gui.QPushButton) if b.text() == "Paste").click()
+            self.assertEqual(dialog.feedback.text(), "Setup key is valid")
+            self.assertEqual((dialog.site.text(), dialog.issuer.text(), dialog.account.text()),
+                             ("example.com", "example.com", "bob"))
+            self.assertIn("8 digits", dialog.note.text())
+            dialog.site.setText("not a site")
+            self.assertFalse(dialog.save_button.isEnabled())
+            dialog.site.setText("example.com")
+            dialog.save_button.click()
+
+        self.open_codes()
+        self.answer_dialog(fill)
+        self.window.add_code_action.trigger()
+        self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+        self.assertEqual(seen[0].windowTitle(), "Add Authenticator Code")
+        added = [e for e in self.server.store.totp_entries(self.uid, self.username) if e.site == "example.com"]
+        self.assertEqual([(e.account, e.digits) for e in added], [("bob", 8)])
+        self.assertEqual(self.app.clipboard().text(), "")
+        self.assertEqual(self.window.statusBar().currentMessage(), "Authenticator code added")
+        self.window.activateWindow()  # the offscreen platform does not hand activation back by itself
+        self.wait_for(lambda: len(self.window._values) == 4)
+
+    def test_edit_changes_the_labels(self):
+        self.open_codes()
+        self.select("github.com")
+
+        def edit(dialog):
+            self.assertEqual(dialog.windowTitle(), "Edit Authenticator Code")
+            self.assertFalse(dialog.key.isVisibleTo(dialog))
+            dialog.account.setText("octo-new")
+            dialog.save_button.click()
+
+        self.answer_dialog(edit)
+        self.window.edit_code_action.trigger()
+        self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+        self.assertIn("octo-new", [e.account for e in self.server.store.totp_entries(self.uid, self.username)])
+
+    def test_trash_lists_deleted_codes_and_purge_needs_the_site_typed(self):
+        self.open_codes()
+        self.select("github.com")
+        self.answer_delete(True)
+        self.window.delete_code_action.trigger()
+        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 2)
+        self.window.trash_action.toggle()
+        self.wait_for(lambda: not self.window._refreshing and self.window.model.rowCount() == 2)
+        self.assertEqual(self.window.model.headerData(2, Qt.Orientation.Horizontal), "Deleted")
+        self.assertEqual(self.window.count_label.text(), "2 authenticator codes")
+        self.select("github.com")
+        self.assertTrue(self.window.code_details.restore_button.isVisible())
+        self.assertFalse(self.window.code_details.code.isVisible())
+        self.window.restore_code_action.trigger()
+        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 1)
+        self.select("gitlab.com")
+
+        def purge(dialog):
+            delete = self.destructive(dialog)
+            QTest.keyClicks(dialog.findChild(gui.QLineEdit), "gitlab")
+            self.assertFalse(delete.isEnabled())
+            QTest.keyClicks(dialog.findChild(gui.QLineEdit), ".com")
+            QTest.mouseClick(delete, Qt.MouseButton.LeftButton)
+
+        self.answer_dialog(purge)
+        self.window.purge_code_action.trigger()
+        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 0)
+        self.assertEqual(self.window.message.title.text(), "The trash is empty")
+        self.assertEqual(self.server.store.totp_trash(self.uid, self.username), [])
+        self.assertEqual(len(self.server.store.totp_entries(self.uid, self.username)), 3)
+
+    @unittest.skipIf(os.getuid() == 0, "root is never asked for a password")
+    def test_settings_turning_the_password_off_asks_and_a_refusal_puts_it_back(self):
+        def flip(dialog):
+            self.wait_for(dialog.ask.isEnabled)
+            self.assertTrue(dialog.ask.isChecked())
+            self.server.verifier.verdict = Verdict.DENIED
+            dialog.ask.click()
+            self.wait_for(lambda: dialog.ask.isEnabled() and dialog.ask.isChecked())
+            self.server.verifier.verdict = Verdict.APPROVED
+            dialog.ask.click()
+            self.wait_for(lambda: dialog.ask.isEnabled() and not dialog.ask.isChecked())
+            self.assertFalse(self.server.store.totp_require_auth(self.uid, self.username))
+            checks = len(self.server.verifier.checks)
+            dialog.ask.click()  # turning it back on never asks
+            self.wait_for(lambda: dialog.ask.isEnabled() and dialog.ask.isChecked())
+            self.assertEqual(len(self.server.verifier.checks), checks)
+            dialog.reject()
+
+        self.answer_dialog(flip)
+        SettingsDialog = gui.SettingsDialog(self.window)
+        SettingsDialog.exec()
+        self.assertTrue(self.server.store.totp_require_auth(self.uid, self.username))
+        self.assertEqual([m[2] for m in self.server.verifier.checks],
+                         ["Show authenticator codes without asking for your password?"] * 2)
 
 
 if __name__ == "__main__":

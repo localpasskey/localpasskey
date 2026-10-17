@@ -1,4 +1,5 @@
 import os
+import pwd
 import stat
 import time
 import unittest
@@ -65,6 +66,32 @@ class ExportDialogTests(unittest.TestCase):
         dialog = gui.ExportDialog(self.parent)
         self.assertFalse(dialog.site.isEnabled())
         self.assertEqual(dialog.selector(), {"all": True})
+
+    def test_codes_are_included_by_default_when_there_are_any(self):
+        dialog = gui.ExportDialog(self.parent, "github.com", codes=3)
+        self.assertEqual(dialog.codes.text(), "Include authenticator codes (3)")
+        self.assertTrue(dialog.codes.isEnabled() and dialog.codes.isChecked())
+        self.assertEqual(dialog.selector(), {"site": "github.com", "codes": True})
+        dialog.codes.setChecked(False)
+        self.assertEqual(dialog.selector(), {"site": "github.com"})
+        for none in (0, None):  # None: the service did not say
+            dialog = gui.ExportDialog(self.parent, codes=none)
+            self.assertEqual(dialog.codes.text(), "Include authenticator codes (0)")
+            self.assertFalse(dialog.codes.isEnabled() or dialog.codes.isChecked())
+            self.assertEqual(dialog.selector(), {"all": True})
+
+    def test_the_plan_lists_codes_too(self):
+        codes = [{"site": "", "issuer": "Bank", "account": "a\nb"}]
+        skipped = [{"code": {"site": "github.com", "issuer": "GitHub", "account": "octocat"},
+                    "reason": "already on this computer"}]
+        dialog = gui.ImportDialog(self.parent, [], [], codes, skipped)
+        self.assertEqual(dialog.findChild(gui.QLabel).text(), "Import 1 authenticator code?")
+        self.assertTrue(dialog.import_button.isEnabled())
+        self.assertEqual(dialog.plan.toPlainText().split("\n\n")[1:], [
+            "Authenticator codes to import (1):\n  Bank  a b",
+            "Skipped authenticator codes (1):\n  github.com  octocat: already on this computer",
+        ])
+        self.assertNotIn("authenticator", gui.plan_text([], []))
 
     def test_the_plan_is_plain_text_with_a_reason_per_skip(self):
         imported = [{"site": "a.example", "user_name": "<b>alice</b>"}]
@@ -183,6 +210,39 @@ class WindowTransferTests(unittest.TestCase):
             records = transfer.load(stream.read(), lambda: PASSPHRASE)
         self.assertEqual(len(records), 7)  # the trash is never exported
         self.assertIn("Exported 7 passkeys", self.window.statusBar().currentMessage())
+
+    def test_export_takes_the_codes_along_unless_unticked_and_import_brings_them_back(self):
+        self.export()
+        with open(self.path, "rb") as stream:
+            records = transfer.load(stream.read(), lambda: PASSPHRASE)
+        self.assertEqual(sorted(c["issuer"] for c in records.codes), ["Example Bank", "GitHub", "Google"])
+        self.assertEqual(self.window.statusBar().currentMessage(), "Exported 7 passkeys and 3 authenticator codes")
+        store, uid_user = self.server.store, (os.getuid(), pwd.getpwuid(os.getuid()).pw_name)
+        live = store.totp_entries(*uid_user)
+        store.totp_remove(*uid_user, [e.id for e in live])
+        store.totp_purge(*uid_user, [e.id for e in live])
+        dialog, _ = self.import_file([PASSPHRASE])
+        self.assertIn("Authenticator codes to import (3):", dialog.plan.toPlainText())
+        self.wait_for(lambda: not self.window._busy and "Imported" in self.window.statusBar().currentMessage())
+        self.assertEqual(self.window.statusBar().currentMessage(), "Imported 3 authenticator codes")
+        self.assertEqual(len(store.totp_entries(*uid_user)), 3)
+
+        os.unlink(self.path)
+
+        def fill(dialog):
+            dialog.all.setChecked(True)
+            dialog.codes.setChecked(False)
+            dialog.passphrase.setText(PASSPHRASE)
+            dialog.repeat.setText(PASSPHRASE)
+            dialog.export_button.click()
+
+        self.on_dialog(fill)
+        with patch.object(gui.QFileDialog, "getSaveFileName", return_value=(self.path, "")):
+            self.window.export_passkeys()
+        self.wait_for(lambda: not self.window._busy)
+        with open(self.path, "rb") as stream:
+            self.assertEqual(transfer.load(stream.read(), lambda: PASSPHRASE).codes, [])
+        self.assertEqual(self.window.statusBar().currentMessage(), "Exported 7 passkeys")
 
     def test_export_write_error_names_the_chosen_file(self):
         hidden = os.path.join(self.tmp.name, ".keys.lpkbackup.1.tmp")
