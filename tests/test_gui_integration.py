@@ -15,7 +15,7 @@ except ImportError:
     gui = None
 
 from localpasskey import cose, totp
-from localpasskey.client import ServiceUnavailable
+from localpasskey.client import ServiceError, ServiceUnavailable
 from localpasskey.clientpin import MAX_PIN_RETRIES, pin_hash
 from localpasskey.ctap2 import Verdict
 from localpasskey.store import Credential, PinState
@@ -703,6 +703,19 @@ class CodesTabTests(unittest.TestCase):
             self.window._on_tick()
             fetch.assert_not_called()
             self.window._fetched_at -= gui.KEEP_UNLOCKED_S  # a minute without a fetch: the service would idle out
+            self.window._on_tick()
+            fetch.assert_called_once()
+
+    def test_a_failed_fetch_is_tried_again_a_minute_later_not_every_tick(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.window._tick.stop()
+        self.window._values, self.window._fetched_at = {}, 0.0  # as if the first fetch failed
+        self.window._on_codes(None, ServiceError("secret of authenticator code 0123 cannot be decrypted"))
+        with patch.object(self.window, "_fetch_codes") as fetch:
+            self.window._on_tick()
+            fetch.assert_not_called()  # no request, and no new error, every second
+            self.window._fetched_at -= gui.KEEP_UNLOCKED_S
             self.window._on_tick()
             fetch.assert_called_once()
 

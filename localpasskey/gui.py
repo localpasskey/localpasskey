@@ -1186,8 +1186,11 @@ class Window(QMainWindow):
             if str(error) == LOCKED:  # idle for too long, or the service restarted
                 self._lock_codes(tell=False)
                 self._rebuild()
-            elif not str(error).startswith("no matching"):  # the last code was just deleted
-                self._error(error)
+            else:
+                # Try again with the keep-alive, a minute on, not on every tick.
+                self._fetched_at = time.monotonic()
+                if not str(error).startswith("no matching"):  # the last code was just deleted
+                    self._error(error)
             return
         now = self._fetched_at = time.monotonic()
         self._show_values({c["id"]: (c["code"], now + c["remaining"], c["period"]) for c in codes})
