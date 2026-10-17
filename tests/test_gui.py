@@ -203,6 +203,36 @@ class CodeTests(unittest.TestCase):
         dialog.account.setText(" octo ")
         self.assertEqual(dialog.labels(), {"site": "github.com", "issuer": "GitHub", "account": "octo"})
 
+    def test_purge_asks_for_the_stripped_site_else_issuer_else_delete(self):
+        cases = [({"site": " github.com ", "issuer": "GitHub"}, "github.com"),
+                 ({"site": "", "issuer": " Example Bank "}, "Example Bank"),
+                 ({"site": " ", "issuer": "  "}, "delete")]
+        for labels, expected in cases:
+            with self.subTest(labels=labels):
+                asked = []
+                window = SimpleNamespace(_busy=False, _send=lambda *a, **k: None,
+                                         _confirm_typed=lambda question, typed: asked.append(typed))
+                gui.Window.confirm_purge_code(window, {"id": "ab", "account": "", **labels})
+                self.assertEqual(asked, [expected])
+
+    def test_typed_confirmation_ignores_case_and_surrounding_spaces(self):
+        from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QDialogButtonBox, QLineEdit
+        seen = []
+
+        def answer():
+            dialog = self.app.activeModalWidget()
+            box = dialog.findChild(QDialogButtonBox)
+            delete = next(b for b in box.buttons()
+                          if box.buttonRole(b) == QDialogButtonBox.ButtonRole.DestructiveRole)
+            dialog.findChild(QLineEdit).setText("  example BANK ")
+            seen.append(delete.isEnabled())
+            dialog.reject()
+
+        QTimer.singleShot(0, answer)
+        gui.Window._confirm_typed(self.parent, "Delete?", " Example Bank ")
+        self.assertEqual(seen, [True])
+
 
 if __name__ == "__main__":
     unittest.main()

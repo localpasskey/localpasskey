@@ -1533,6 +1533,7 @@ class Window(QMainWindow):
         text = QLabel(question)
         text.setTextFormat(Qt.TextFormat.PlainText)
         text.setWordWrap(True)
+        expected = expected.strip()
         instruction = QLabel(f'Type "{expected}" to confirm. This cannot be undone.')
         instruction.setTextFormat(Qt.TextFormat.PlainText)
         typed = QLineEdit()
@@ -1618,7 +1619,7 @@ class Window(QMainWindow):
     def confirm_purge_code(self, entry):
         if self._busy:
             return
-        expected = entry["site"] or entry["issuer"] or "delete"
+        expected = entry["site"].strip() or entry["issuer"].strip() or "delete"
         question = (f"Permanently delete the authenticator code for {code_title(entry)}? "
                     "You may lose access to that account.")
         if self._confirm_typed(question, expected):
