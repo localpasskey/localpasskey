@@ -69,8 +69,14 @@ class ExportDialogTests(unittest.TestCase):
 
     def test_codes_are_included_by_default_when_there_are_any(self):
         dialog = gui.ExportDialog(self.parent, "github.com", codes=3)
-        self.assertEqual(dialog.codes.text(), "Include authenticator codes (3)")
+        self.assertEqual(dialog.codes.text(), "Include this website's authenticator codes",
+                         "the count is for all websites, not this one")
         self.assertTrue(dialog.codes.isEnabled() and dialog.codes.isChecked())
+        dialog.all.setChecked(True)
+        self.assertEqual(dialog.codes.text(), "Include authenticator codes (3)")
+        self.assertEqual(dialog.selector(), {"all": True, "codes": True})
+        dialog.site.setChecked(True)
+        self.assertEqual(dialog.codes.text(), "Include this website's authenticator codes")
         self.assertEqual(dialog.selector(), {"site": "github.com", "codes": True})
         dialog.codes.setChecked(False)
         self.assertEqual(dialog.selector(), {"site": "github.com"})

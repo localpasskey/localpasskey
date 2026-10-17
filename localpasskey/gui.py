@@ -673,8 +673,14 @@ class ExportDialog(QDialog):
         scope = QButtonGroup(self)
         scope.addButton(self.all)
         scope.addButton(self.site)
-        # With a site chosen, only the codes saved for that website go along.
-        self.codes = QCheckBox(f"Include authenticator codes ({codes or 0})", checked=bool(codes), enabled=bool(codes))
+        # With a site chosen, only the codes saved for that website go along: their number is not known here.
+        self.codes = QCheckBox(checked=bool(codes), enabled=bool(codes))
+        def label(site_chosen):
+            self.codes.setText("Include this website's authenticator codes" if site_chosen
+                               else f"Include authenticator codes ({codes or 0})")
+
+        label(self.site.isChecked())
+        self.site.toggled.connect(label)
         self.passphrase = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
         self.repeat = QLineEdit(echoMode=QLineEdit.EchoMode.Password)
         form = QFormLayout()
