@@ -31,6 +31,9 @@ MAX_LABEL = MAX_LABEL_LENGTH  # site, issuer and account
 _HASHES = {"SHA1": hashlib.sha1, "SHA256": hashlib.sha256, "SHA512": hashlib.sha512}
 _BASE32 = re.compile(r"[A-Z2-7]*")
 _NUMBER = re.compile(r"[0-9]{1,4}")
+# A dotted host name of ASCII letters, digits and hyphens: what "Open Website" can open.
+_HOST = re.compile(r"(?=.{1,253}\Z)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?",
+                   re.ASCII)
 
 
 class OtpError(ValueError):
@@ -154,8 +157,25 @@ def code(
     return hotp(secret, seconds // period, algorithm, digits), period - seconds % period
 
 
+def normalize_site(text: str) -> str:
+    """The host of a typed website: "https://GitHub.com/login" -> "github.com".
+
+    Anything that is not a plain host name comes back stripped but otherwise
+    as typed, for the service to accept or refuse."""
+    text = text.strip()
+    host = text
+    if "://" in text:
+        try:
+            host = urlsplit(text).hostname or ""
+        except ValueError:
+            host = ""
+    host = host.rstrip(".").lower()
+    return host if _HOST.fullmatch(host) else text
+
+
 def site_from_issuer(issuer: str) -> str:
     """A website suggestion when the issuer is a host name, otherwise ""."""
-    if "." in issuer and not any(ch.isspace() for ch in issuer) and valid_rp_id(issuer):
-        return issuer.lower()
+    host = issuer.strip().rstrip(".").lower()
+    if "." in host and _HOST.fullmatch(host) and valid_rp_id(host):
+        return host
     return ""

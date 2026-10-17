@@ -176,6 +176,22 @@ class SiteTests(unittest.TestCase):
         self.assertEqual(totp.site_from_issuer("ACME Co.uk"), "")
         self.assertEqual(totp.site_from_issuer(""), "")
         self.assertEqual(totp.site_from_issuer("a" * 300 + ".com"), "")
+        # Only plain host names: a URL or an address is no website suggestion.
+        self.assertEqual(totp.site_from_issuer("https://github.com"), "")
+        self.assertEqual(totp.site_from_issuer("octocat@github.com"), "")
+        self.assertEqual(totp.site_from_issuer("github.com."), "github.com")
+
+    def test_normalize_site(self):
+        self.assertEqual(totp.normalize_site("  GitHub.com "), "github.com")
+        self.assertEqual(totp.normalize_site("https://GitHub.com/settings/security?x=1"), "github.com")
+        self.assertEqual(totp.normalize_site("https://user@login.example.org:8443/"), "login.example.org")
+        self.assertEqual(totp.normalize_site("example.com."), "example.com")
+        self.assertEqual(totp.normalize_site(""), "")
+        # Not a host name: kept as typed (stripped), for the service to judge.
+        self.assertEqual(totp.normalize_site(" My Bank "), "My Bank")
+        self.assertEqual(totp.normalize_site("localhost"), "localhost")
+        self.assertEqual(totp.normalize_site("https://[::1"), "https://[::1")
+        self.assertEqual(totp.normalize_site("bücher.de"), "bücher.de")
 
 
 if __name__ == "__main__":
