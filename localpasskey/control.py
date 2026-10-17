@@ -477,6 +477,8 @@ class ControlServer:
             chosen = self._select(request, self.store.credentials(target_uid, username), empty_ok=with_codes)
         if not chosen and not chosen_codes:
             raise ControlError("nothing to export")
+        for entry in chosen_codes:
+            self.store.totp_unseal(target_uid, entry)  # a broken seal fails before the password is asked
         if request.get("dry_run"):
             return {"ok": True, "user": username, "exported": [describe(c) for c in chosen],
                     "exported_codes": [describe_totp(e) for e in chosen_codes]}

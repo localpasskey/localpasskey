@@ -571,6 +571,20 @@ class TotpControlTests(unittest.TestCase):
         self.assertEqual(self.raw({"command": "export", "ids": [cred.id.hex()], "codes": True,
                                    "dry_run": True})["exported_codes"], [])
 
+    def test_a_code_that_cannot_be_decrypted_fails_the_export_before_any_prompt(self):
+        added = self.add()
+        path = self.store._totp_path(self.uid)
+        doc = json.loads(path.read_text())
+        sealed = bytearray(base64.urlsafe_b64decode(doc["entries"][0]["secret"] + "=="))
+        sealed[-1] ^= 1
+        doc["entries"][0]["secret"] = b64encode(bytes(sealed))
+        path.write_text(json.dumps(doc))
+        self.polkit.checks.clear()
+        for request in ({"all": True, "codes": True, "dry_run": True}, {"code_ids": [added["id"]]}):
+            with self.subTest(request=request), self.assertRaisesRegex(StoreError, "cannot be decrypted"):
+                self.raw({"command": "export", **request})
+        self.assertEqual(self.polkit.checks, [])
+
     def test_export_leaves_out_codes_trashed_during_the_dialog(self):
         added = self.add()
         self.add(account="b")
