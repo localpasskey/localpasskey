@@ -201,6 +201,27 @@ class CliTotpTests(unittest.TestCase):
         self.assertIn("Permanently deleted the authenticator code for Bank.", out)
         self.assertEqual(self.codes(trash=True), [])
 
+    def test_purge_asks_for_the_site_else_the_issuer_else_delete(self):
+        # The wrong answer is what a user might type instead: the issuer, the account, the old ID prefix.
+        for site, issuer, name, done, wrong in (("github.com", "GitHub", "github.com", "github.com", "GitHub"),
+                                                ("", "Bank", "Bank", "Bank", "me"),
+                                                ("", "", "delete", "an account", None)):
+            with self.subTest(name=name):
+                entry = self.store_code(site=site, issuer=issuer, account="me")
+                self.fixture.store.totp_remove(self.fixture.uid, self.fixture.name, [entry.id])
+                prefix = entry.id.hex()[:8]
+                for typed in (wrong or prefix, ""):
+                    code, out, _ = self.run_cli("totp", "purge", prefix, typed=[typed])
+                    self.assertEqual(code, 1, typed)
+                    self.assertIn("Nothing deleted.", out)
+                self.assertTrue(self.prompts[0].startswith(
+                    f'Type "{name}" to permanently delete this authenticator code.'), self.prompts)
+                code, out, err = self.run_cli("totp", "purge", prefix, typed=[f"  {name.upper()} "])
+                self.assertEqual(code, 0, err)
+                self.assertIn(f"Permanently deleted the authenticator code for {done}.", out)
+                self.assertEqual(self.codes(trash=True), [])
+        self.assertEqual(self.checks(), [ACTION_MANAGE] * 3, "a wrong name never reaches the service")
+
     def test_purge_ignores_spaces_around_the_name(self):
         # Saved before the service stripped labels; the typed text is stripped too.
         spaced = self.store_code(site="", issuer=" Bank ", account="")

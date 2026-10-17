@@ -516,15 +516,15 @@ def cmd_totp_purge(args):
     [doomed] = request({**selector, "dry_run": True}, args.socket)["deleted"]
     _print_codes([doomed], deleted=True)
     # Like passkeys, the code is pinned by the ID above; the name is only a
-    # check that the user means it. A code with neither site nor issuer has its ID.
-    name = _printable(doomed["site"]).strip() or _printable(doomed["issuer"]).strip() or doomed["id"][:8]
+    # check that the user means it, the same one the window asks for.
+    name = _printable(doomed["site"]).strip() or _printable(doomed["issuer"]).strip() or "delete"
     typed = input(f'Type "{name}" to permanently delete this authenticator code. You may lose access to '
                   "that account. This cannot be undone.\n> ")
     if typed.strip().casefold() != name.casefold():
         print("Nothing deleted.")
         return 1
     _ask({**selector, "ids": [doomed["id"]]}, args)
-    print(f"Permanently deleted the authenticator code for {name}.")
+    print(f"Permanently deleted the authenticator code for {_code_name(doomed)}.")
     return 0
 
 
