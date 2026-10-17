@@ -314,9 +314,11 @@ then the current codes are shown with a countdown and refresh by themselves.
 *Code → Add Code…* (Ctrl+N) takes the pasted link or setup key and checks it
 as you type, *Copy Code* (Ctrl+C) copies the current code and clears the
 clipboard 30 seconds later, and *Edit…*, *Move to Trash…*, *Restore* and
-*Delete Permanently…* work as they do for passkeys. The tab locks again when
-you leave it or close the window, and codes are hidden while the window is in
-the background.
+*Delete Permanently…* work as they do for passkeys. Codes are hidden while
+the window is in the background. The tab locks again when you leave it or
+close the window. It also locks once the window has asked for no code for 5
+minutes, for example while in the background, and when the service restarts;
+the tab then shows *Unlock* again.
 
 Showing codes is protected by your password by default. *File → Settings…*
 (or `localpasskey totp settings --require-password no`) turns that off;

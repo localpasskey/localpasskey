@@ -54,8 +54,12 @@ changes by itself, and the details show it in large digits with a countdown
 and a
 .B Copy Code
 button. Copied codes are removed from the clipboard after 30 seconds if they
-are still there. Codes are hidden while the window is in the background, and
-the tab locks again when you leave it or close the window, and after 5 minutes in the background.
+are still there. Codes are hidden while the window is in the background. The
+tab locks again when you leave it or close the window. It also locks once the
+window has asked for no code for 5 minutes, for example while in the
+background, and when the service restarts; the tab then shows
+.B Unlock
+again.
 .PP
 In this tab the Code menu, also on right-click, replaces the Passkey menu.
 .B Add Code\[u2026]
