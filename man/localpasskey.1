@@ -335,7 +335,9 @@ those for the site with
 and none when passkeys are chosen by
 .IR ID .
 The command lists them with the passkeys, and one password dialog allows
-both. A backup with codes is format version 2, which LocalPasskey 0.3.1 and
+both. If the service cannot read your codes, the export stops and suggests
+.BR \-\-no\-codes ,
+which exports the passkeys alone. A backup with codes is format version 2, which LocalPasskey 0.3.1 and
 earlier refuse to open rather than drop the codes; a backup without codes is
 unchanged. CXF files never hold codes, and with
 .B \-\-format cxf
