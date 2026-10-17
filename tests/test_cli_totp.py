@@ -201,6 +201,15 @@ class CliTotpTests(unittest.TestCase):
         self.assertIn("Permanently deleted the authenticator code for Bank.", out)
         self.assertEqual(self.codes(trash=True), [])
 
+    def test_purge_ignores_spaces_around_the_name(self):
+        # Saved before the service stripped labels; the typed text is stripped too.
+        spaced = self.store_code(site="", issuer=" Bank ", account="")
+        self.fixture.store.totp_remove(self.fixture.uid, self.fixture.name, [spaced.id])
+        code, _, err = self.run_cli("totp", "purge", spaced.id.hex()[:8], typed=["bank"])
+        self.assertEqual(code, 0, err)
+        self.assertTrue(self.prompts[0].startswith('Type "Bank" to permanently delete this authenticator code.'))
+        self.assertEqual(self.codes(trash=True), [])
+
     def test_settings(self):
         code, out, _ = self.run_cli("totp", "settings")
         self.assertEqual(out.strip(), "Your password is needed to show authenticator codes.")

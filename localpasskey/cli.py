@@ -517,7 +517,7 @@ def cmd_totp_purge(args):
     _print_codes([doomed], deleted=True)
     # Like passkeys, the code is pinned by the ID above; the name is only a
     # check that the user means it. A code with neither site nor issuer has its ID.
-    name = _printable(doomed["site"]) or _printable(doomed["issuer"]) or doomed["id"][:8]
+    name = _printable(doomed["site"]).strip() or _printable(doomed["issuer"]).strip() or doomed["id"][:8]
     typed = input(f'Type "{name}" to permanently delete this authenticator code. You may lose access to '
                   "that account. This cannot be undone.\n> ")
     if typed.strip().casefold() != name.casefold():
