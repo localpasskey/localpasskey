@@ -218,6 +218,31 @@ class TotpControlTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "not shown"):
             self.handle({"action": "code", "ids": [added["id"]], "ask": True})
 
+    def test_a_one_shot_code_leaves_out_an_entry_trashed_during_the_dialog(self):
+        added = self.add()
+
+        def trash_it(subject, action_id, message, cancelled=None, timeout=120.0):
+            self.store.totp_remove(self.uid, self.name, [bytes.fromhex(added["id"])])
+            return Verdict.APPROVED
+
+        self.polkit.check = trash_it
+        self.assertEqual(self.handle({"action": "code", "ids": [added["id"]], "ask": True})["codes"], [])
+
+    def test_an_unlock_belongs_to_the_process_that_was_asked(self):
+        self.add()
+        start = [1]
+
+        def pid_reused_during_the_dialog(subject, action_id, message, cancelled=None, timeout=120.0):
+            start[0] = 2  # the asking process quit and its pid went to another one
+            return Verdict.APPROVED
+
+        self.polkit.check = pid_reused_during_the_dialog
+        with patch("localpasskey.control.process_start_time", lambda pid: start[0]):
+            self.unlock()
+            self.assertEqual(list(self.server._unlocks), [(self.uid, os.getpid(), 1)])
+            with self.assertRaisesRegex(ControlError, "locked"):
+                self.handle({"action": "code", "all": True})
+
     def test_dialogs_and_notifications_never_name_the_account(self):
         self.server._unlocks[self.server._unlock_key(os.getpid(), self.uid)] = time.monotonic() + 60
         added = self.handle({"action": "add", "entry": self.entry(site="", issuer="", account="octocat")})["added"]
