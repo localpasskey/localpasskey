@@ -28,6 +28,7 @@ ALLOW_USER_INTERACTION = 0x1
 ACTION_AUTHENTICATE = "org.localpasskey.authenticate"
 ACTION_MANAGE = "org.localpasskey.manage"
 ACTION_EXPORT = "org.localpasskey.export"
+ACTION_TOTP = "org.localpasskey.totp"
 
 
 def process_start_time(pid: int) -> int:

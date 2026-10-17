@@ -6,7 +6,9 @@
   localpasskeyd replaces the message below with one naming the site and
   account. Keep the defaults at auth_self: a passkey must never be usable
   without the user confirming it (allow_active=yes would let any website use
-  your passkeys silently).
+  your passkeys silently). org.localpasskey.totp guards showing
+  authenticator codes; keep it at auth_self too, or anyone at the keyboard
+  could read every code.
 -->
 <policyconfig>
   <vendor>LocalPasskey</vendor>
@@ -35,6 +37,16 @@
   <action id="org.localpasskey.export">
     <description>Export passkeys stored on this computer</description>
     <message>Authentication is required to export passkeys stored on this computer</message>
+    <defaults>
+      <allow_any>auth_self</allow_any>
+      <allow_inactive>auth_self</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.localpasskey.totp">
+    <description>Show authenticator codes stored on this computer</description>
+    <message>Authentication is required to show the authenticator codes stored on this computer</message>
     <defaults>
       <allow_any>auth_self</allow_any>
       <allow_inactive>auth_self</allow_inactive>
