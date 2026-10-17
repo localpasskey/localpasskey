@@ -386,7 +386,8 @@ class CliTotpTests(unittest.TestCase):
 
     def test_export_suggests_no_codes_when_a_secret_cannot_be_decrypted(self):
         store = self.fixture.store
-        broken = TotpEntry(id=os.urandom(16), sealed_secret=store.seal(self.fixture.uid, b"totp\0" + os.urandom(16), SECRET),
+        sealed = store.seal(self.fixture.uid, b"totp\0" + os.urandom(16), SECRET)
+        broken = TotpEntry(id=os.urandom(16), sealed_secret=sealed,
                            site="github.com", issuer="GitHub", account="octocat", created=1700000000.0)
         store.totp_add(self.fixture.uid, self.fixture.name, broken)  # sealed under another code's label
         path = os.path.join(self.tmp, "keys.lpkbackup")
@@ -595,6 +596,22 @@ class TtyAgentTests(unittest.TestCase):
                 agent, popen = self.start(**kwargs)
                 self.assertIsNone(agent)
                 popen.assert_not_called()
+
+
+class HelpTests(unittest.TestCase):
+    def help(self, *args):
+        with contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit):
+            cli.main([*args, "--help"])
+        return " ".join(out.getvalue().split())
+
+    def test_help_names_the_codes_that_export_and_import_cover(self):
+        self.assertIn("passkeys and authenticator codes", self.help())
+        export = self.help("export")
+        for text in ("export every passkey and authenticator code for this site",
+                     "export all of your passkeys and authenticator codes (the default)",
+                     "export another user's passkeys and authenticator codes"):
+            self.assertIn(text, export)
+        self.assertIn("passkeys and authenticator codes from a backup", self.help())
 
 
 class CliTotpProcessTests(unittest.TestCase):

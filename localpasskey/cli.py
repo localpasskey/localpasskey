@@ -548,7 +548,7 @@ def cmd_totp_code(args):
         raise CliError(f"no authenticator code with ID {matches[0]['id']}")  # deleted during the dialog
     [code] = reply["codes"]
     print(code["code"])
-    print(f"valid for {math.ceil(code['remaining'])} more seconds", file=sys.stderr)  # an int or, from newer daemons, a float
+    print(f"valid for {math.ceil(code['remaining'])} more seconds", file=sys.stderr)  # int or float
     return 0
 
 
@@ -607,7 +607,8 @@ def cmd_totp_settings(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="localpasskey", description="Manage the passkeys that localpasskeyd stores on this computer."
+        prog="localpasskey",
+        description="Manage the passkeys and authenticator codes that localpasskeyd stores on this computer.",
     )
     parser.add_argument("--socket", default=socket_path(), help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -652,20 +653,22 @@ def main(argv=None):
     sub = commands.add_parser("export", help="save passkeys and authenticator codes to an encrypted backup file")
     sub.add_argument("file", metavar="FILE", help="file to write, e.g. passkeys.lpkbackup")
     sub.add_argument("ids", nargs="*", metavar="ID", help="passkey ID (or a unique prefix of it) from `list`")
-    sub.add_argument("--site", help="export every passkey for this site")
-    sub.add_argument("--all", action="store_true", help="export all of your passkeys (the default)")
+    sub.add_argument("--site", help="export every passkey and authenticator code for this site")
+    sub.add_argument("--all", action="store_true",
+                     help="export all of your passkeys and authenticator codes (the default)")
     sub.add_argument("--format", choices=("localpasskey", "cxf"), default="localpasskey",
                      help="localpasskey: encrypted backup (default); cxf: FIDO Credential Exchange Format")
     sub.add_argument("--unencrypted", action="store_true", help="required for --format cxf: write the keys in the clear")
     sub.add_argument("--force", action="store_true", help="replace FILE if it exists")
     sub.add_argument("--no-codes", action="store_true",
                      help="leave out your authenticator codes (included by default; CXF never has them)")
-    sub.add_argument("--user", help="export another user's passkeys (root only)")
+    sub.add_argument("--user", help="export another user's passkeys and authenticator codes (root only)")
     sub.set_defaults(func=cmd_export)
 
-    sub = commands.add_parser("import", help="add the passkeys from a backup, CXF or Bitwarden JSON file")
+    sub = commands.add_parser("import", help="add the passkeys and authenticator codes from a backup, CXF or "
+                              "Bitwarden JSON file")
     sub.add_argument("file", metavar="FILE", help="LocalPasskey backup, CXF file or unencrypted Bitwarden JSON export")
-    sub.add_argument("--user", help="import into another user's passkeys (root only)")
+    sub.add_argument("--user", help="import into another user's passkeys and authenticator codes (root only)")
     sub.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
     sub.set_defaults(func=cmd_import)
 
