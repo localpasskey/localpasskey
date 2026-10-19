@@ -412,6 +412,16 @@ class TotpControlTests(unittest.TestCase):
         self.assertEqual((added["kind"], added["digits"]), ("steam", 5))
         self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].kind, "steam")
 
+    def test_a_steam_entry_keeps_a_30_second_period(self):
+        added = self.add(site="steamcommunity.com", kind="steam", digits=5, period=60)
+        self.assertEqual(added["period"], 30)
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].period, 30)
+        self.unlock()
+        with patch("localpasskey.control.time.time", return_value=1700000060.0):
+            [steam] = self.handle({"action": "code", "all": True})["codes"]
+        self.assertEqual(steam["code"], totp.steam_code(SECRET, 1700000060 // 30))
+        self.assertEqual(steam["remaining"], 10)
+
     def test_code_records_carry_kind_and_counter_but_plain_totp_does_not(self):
         hotp_entry = self.add(kind="hotp", counter=9)
         totp_entry = self.add(site="other.example")

@@ -138,6 +138,11 @@ class TotpEntry:
     kind: str = "totp"  # "totp", "hotp" or "steam"
     counter: int = 0  # the next HOTP counter; 0 and unused for the others
 
+    def __post_init__(self):
+        if self.kind == "steam":  # Steam is always a 30 s code; no record may say otherwise
+            from . import totp  # not at the top: totp imports ctap2, which imports this module
+            self.period = totp.DEFAULT_PERIOD
+
     def to_json(self) -> dict:
         data = {
             "id": b64encode(self.id),
