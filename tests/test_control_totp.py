@@ -343,6 +343,20 @@ class TotpControlTests(unittest.TestCase):
         self.assertEqual(steam["period"], 30)
         self.assertIn("remaining", steam)
 
+    def test_code_all_with_only_hotp_codes_returns_nothing_and_keeps_the_unlock(self):
+        self.add(kind="hotp", counter=7)
+        with self.assertRaisesRegex(ControlError, "locked"), \
+                patch("localpasskey.control.time.monotonic", return_value=1000.0):
+            self.handle({"action": "code", "all": True})
+        with patch("localpasskey.control.time.monotonic", return_value=1000.0):
+            self.unlock()
+        with patch("localpasskey.control.time.monotonic", return_value=1000.0 + UNLOCK_IDLE - 1):
+            self.assertEqual(self.handle({"action": "code", "all": True})["codes"], [])
+        with patch("localpasskey.control.time.monotonic", return_value=1000.0 + UNLOCK_IDLE + 10):
+            self.assertEqual(self.handle({"action": "code", "all": True})["codes"], [])
+            self.assertTrue(self.handle({"action": "status"})["unlocked"],
+                            "the empty reply still extended the unlock")
+
     def test_next_advances_an_hotp_counter_and_reads_only_one_code(self):
         hotp_entry = self.add(kind="hotp", counter=3)
         totp_entry = self.add(site="other.example")
