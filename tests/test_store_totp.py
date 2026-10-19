@@ -68,6 +68,79 @@ class TotpStoreTests(unittest.TestCase):
         })
         self.assertNotIn("0123456789", self.path.read_text())
 
+    def hotp(self, secret=b"hotp-secret", counter=0, entry_id=None):
+        entry = self.entry(secret=secret, entry_id=entry_id)
+        entry.kind, entry.counter = "hotp", counter
+        return entry
+
+    def test_kind_and_counter_round_trip(self):
+        plain, hotp, steam = self.entry(), self.hotp(), self.entry()
+        steam.kind, steam.digits = "steam", 5
+        for entry in (plain, hotp, steam):
+            self.store.totp_add(UID, USER, entry)
+        got = {e.kind: e for e in self.store.totp_entries(UID, USER)}
+        self.assertEqual((got["totp"].counter, got["hotp"].counter), (0, 0))
+        self.assertEqual((got["steam"].digits, got["steam"].counter), (5, 0))
+        self.store.totp_next(UID, USER, hotp.id)
+        self.assertEqual({e.kind: e.counter for e in self.store.totp_entries(UID, USER)}["hotp"], 1)
+
+    def test_format_2_only_when_a_code_is_not_totp(self):
+        self.store.totp_add(UID, USER, self.entry())
+        doc = json.loads(self.path.read_text())
+        self.assertEqual(doc["format"], 1)  # a 0.4.0 daemon still reads this file
+        self.assertEqual(set(doc["entries"][0]), {
+            "id", "site", "issuer", "account", "secret", "algorithm", "digits", "period", "created", "deleted",
+        })
+        hotp = self.hotp()
+        self.store.totp_add(UID, USER, hotp)
+        doc = json.loads(self.path.read_text())
+        self.assertEqual(doc["format"], 2)
+        self.assertEqual(doc["entries"][0].get("kind"), None)  # a plain TOTP entry carries neither key
+        self.assertEqual((doc["entries"][1]["kind"], doc["entries"][1]["counter"]), ("hotp", 0))
+        self.store.totp_purge(UID, USER, [e.id for e in self.store.totp_remove(UID, USER, [hotp.id])])
+        self.assertEqual(json.loads(self.path.read_text())["format"], 1)  # back to a readable file
+
+    def test_format_2_with_only_totp_entries_is_read(self):
+        self.write_doc(format=2, entries=[self.entry().to_json()])
+        [entry] = self.store.totp_entries(UID, USER)
+        self.assertEqual((entry.kind, entry.counter), ("totp", 0))
+
+    def test_next_advances_the_counter_before_returning(self):
+        hotp = self.hotp(counter=3)
+        self.store.totp_add(UID, USER, hotp)
+        advanced, used = self.store.totp_next(UID, USER, hotp.id)
+        self.assertEqual((advanced.id, used, advanced.counter), (hotp.id, 3, 4))
+        self.assertEqual(self.store.totp_entries(UID, USER)[0].counter, 4)  # written, not just returned
+        self.assertEqual(self.store.totp_next(UID, USER, hotp.id)[1], 4)  # each call takes a window
+        with self.assertRaises(KeyError):
+            self.store.totp_next(UID, USER, os.urandom(16))
+        self.store.totp_remove(UID, USER, [hotp.id])
+        with self.assertRaises(KeyError):
+            self.store.totp_next(UID, USER, hotp.id)  # a trashed code has no next code
+        self.store.totp_restore(UID, USER, [hotp.id])
+        self.assertEqual(self.store.totp_next(UID, USER, hotp.id)[1], 5)
+
+    def test_next_refuses_a_code_that_has_no_counter(self):
+        for kind in ("totp", "steam"):
+            entry = self.entry(secret=kind.encode())
+            entry.kind, entry.digits = kind, 5 if kind == "steam" else 6
+            self.store.totp_add(UID, USER, entry)
+            with self.assertRaisesRegex(StoreError, "HOTP"):
+                self.store.totp_next(UID, USER, entry.id)
+
+    def test_bad_kind_or_counter_fails_closed(self):
+        good = self.entry().to_json()
+        for bad in ({**good, "kind": "md5"}, {**good, "kind": None}, {**good, "kind": 1},
+                    {**good, "kind": "hotp", "counter": -1},
+                    {**good, "kind": "hotp", "counter": 2**53},
+                    {**good, "kind": "hotp", "counter": "3"},
+                    {**good, "kind": "hotp", "counter": True},
+                    {**good, "kind": "steam", "digits": 6},
+                    {**good, "kind": "steam", "counter": 1}):
+            self.write_doc(format=2, entries=[bad])
+            with self.assertRaisesRegex(StoreError, "malformed authenticator code", msg=bad):
+                self.store.totp_entries(UID, USER)
+
     def test_missing_file(self):
         self.assertEqual(self.store.totp_entries(UID, USER), [])
         self.assertEqual(self.store.totp_trash(UID, USER), [])
@@ -133,7 +206,8 @@ class TotpStoreTests(unittest.TestCase):
                 self.store.totp_entries(UID, USER)
 
     def test_format_uid_user_checks(self):
-        for changes in ({"format": 2}, {"format": None}, {"uid": 1001}, {"entries": None}):
+        for changes in ({"format": 3}, {"format": 0}, {"format": None}, {"format": True},
+                        {"uid": 1001}, {"entries": None}):
             self.write_doc(**changes)
             with self.assertRaises(StoreError, msg=changes):
                 self.store.totp_entries(UID, USER)

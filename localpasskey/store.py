@@ -29,7 +29,10 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 # trashed passkeys as live and dropping the key on its next write.
 FORMAT_VERSION = 2
 PIN_FORMAT_VERSION = 1
-TOTP_FORMAT_VERSION = 1
+# Format 2 added "kind" and "counter" to an entry, and only a file that holds a
+# kind other than totp is written as 2: a 0.4.0 daemon then refuses it instead
+# of showing wrong codes for an HOTP entry and dropping its counter on a write.
+TOTP_FORMAT_VERSION = 2
 MAX_CREDENTIALS_PER_USER = 4096
 MAX_TOTP_PER_USER = 4096  # separate from passkeys; the trash counts until purged
 _NONCE_SIZE = 12
@@ -132,9 +135,11 @@ class TotpEntry:
     period: int = 30
     created: float = 0.0
     deleted: Optional[float] = None
+    kind: str = "totp"  # "totp", "hotp" or "steam"
+    counter: int = 0  # the next HOTP counter; 0 and unused for the others
 
     def to_json(self) -> dict:
-        return {
+        data = {
             "id": b64encode(self.id),
             "site": self.site,
             "issuer": self.issuer,
@@ -146,6 +151,11 @@ class TotpEntry:
             "created": self.created,
             "deleted": self.deleted,
         }
+        if self.kind != "totp":  # a plain TOTP entry keeps the format 1 keys byte for byte
+            data["kind"] = self.kind
+        if self.kind == "hotp":
+            data["counter"] = self.counter
+        return data
 
     @classmethod
     def from_json(cls, data: dict) -> "TotpEntry":
@@ -155,13 +165,23 @@ class TotpEntry:
             raise ValueError(f"invalid deleted timestamp {deleted!r}")
         from . import totp  # not at the top: totp imports ctap2, which imports this module
 
+        kind = data.get("kind", "totp")
+        counter = data.get("counter", 0)
+        if not isinstance(kind, str) or kind not in ("totp", "hotp", "steam"):
+            raise ValueError(f"invalid kind {kind!r}")
+        if (isinstance(counter, bool) or not isinstance(counter, int)
+                or not 0 <= counter <= totp.MAX_COUNTER):
+            raise ValueError(f"invalid counter {counter!r}")
+        if kind != "hotp" and counter:
+            raise ValueError(f"invalid counter {counter!r} for a {kind} code")
         algorithm = data.get("algorithm", totp.DEFAULT_ALGORITHM)
         digits = data.get("digits", totp.DEFAULT_DIGITS)
         period = data.get("period", totp.DEFAULT_PERIOD)
         # Fail closed here too: a code computed with a value the daemon never accepts is no code.
-        if algorithm not in totp.ALGORITHMS:
+        if not isinstance(algorithm, str) or algorithm not in totp.ALGORITHMS:
             raise ValueError(f"invalid algorithm {algorithm!r}")
-        if isinstance(digits, bool) or not isinstance(digits, int) or digits not in totp.DIGITS:
+        if isinstance(digits, bool) or not isinstance(digits, int) or digits not in (
+                (totp.STEAM_DIGITS,) if kind == "steam" else totp.DIGITS):
             raise ValueError(f"invalid digits {digits!r}")
         if (isinstance(period, bool) or not isinstance(period, int)
                 or not totp.MIN_PERIOD <= period <= totp.MAX_PERIOD):
@@ -177,6 +197,8 @@ class TotpEntry:
             period=period,
             created=float(data.get("created", 0.0)),
             deleted=None if deleted is None else float(deleted),
+            kind=kind,
+            counter=counter,
         )
 
 
@@ -533,7 +555,8 @@ class CredentialStore:
             return True, []
         except ValueError as e:
             raise StoreError(f"{path} is not valid JSON: {e}") from None
-        if not isinstance(doc, dict) or doc.get("format") != TOTP_FORMAT_VERSION or doc.get("uid") != uid:
+        if (not isinstance(doc, dict) or doc.get("format") not in (1, TOTP_FORMAT_VERSION)
+                or isinstance(doc.get("format"), bool) or doc.get("uid") != uid):
             raise StoreError(f"{path} has an unexpected format or uid")
         if doc.get("user") != username:
             raise StoreError(f"{path} belongs to user {doc.get('user')!r}, not {username!r}")
@@ -554,7 +577,8 @@ class CredentialStore:
         _make_private_dir(path.parent.parent)
         _make_private_dir(path.parent)
         doc = {
-            "format": TOTP_FORMAT_VERSION,
+            # Only a kind other than totp needs format 2; the rest stays readable by 0.4.0.
+            "format": 2 if any(e.kind != "totp" for e in entries) else 1,
             "uid": uid,
             "user": username,
             "require_auth": require_auth,
@@ -617,6 +641,26 @@ class CredentialStore:
             if imported and not dry_run:
                 self._write_totp(uid, username, require_auth, stored + imported)
             return imported, skipped
+
+    def totp_next(self, uid: int, username: str, entry_id: bytes) -> Tuple[TotpEntry, int]:
+        """Advance an HOTP counter and return its entry and the counter to use.
+
+        The new counter is written before it is returned: a crash loses one
+        window instead of handing out a code the site will see twice."""
+        from . import totp  # not at the top: totp imports ctap2, which imports this module
+        with self._lock:
+            require_auth, entries = self._read_totp(uid, username)
+            for entry in entries:
+                if entry.id == entry_id and entry.deleted is None:
+                    if entry.kind != "hotp":
+                        raise StoreError("only an HOTP code has a next code")
+                    if entry.counter >= totp.MAX_COUNTER:
+                        raise StoreError("this HOTP code has run out of counters")
+                    used = entry.counter
+                    entry.counter += 1
+                    self._write_totp(uid, username, require_auth, entries)
+                    return entry, used
+            raise KeyError(entry_id)
 
     def totp_remove(self, uid: int, username: str, ids: Iterable[bytes]) -> List[TotpEntry]:
         """Move the given live codes to the trash and return them."""
