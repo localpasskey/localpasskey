@@ -174,8 +174,17 @@ class ParseTests(unittest.TestCase):
     def test_steam_links(self):
         want = dict(issuer="", account="", algorithm="SHA1", digits=5, period=30,
                     kind="steam", counter=0)
-        for text in (f"steam://{KEY}", f"otpauth://steam/{KEY}", f"otpauth://steam/x?secret={KEY}"):
+        for text in (f"steam://{KEY}", f"otpauth://steam/{KEY}"):
             self.assertEqual(totp.parse(text), dict(want, secret=SECRET), text)
+        got = totp.parse(f"otpauth://steam/x?secret={KEY}")
+        self.assertEqual(got, dict(want, secret=SECRET, account="x"))
+        got = totp.parse(f"otpauth://steam/Steam:alice?secret={KEY}&issuer=Steam")
+        self.assertEqual((got["issuer"], got["account"]), ("Steam", "alice"))
+        got = totp.parse(f"otpauth://steam/Steam:alice?secret={KEY}")  # Aegis: issuer only in the label
+        self.assertEqual((got["issuer"], got["account"]), ("Steam", "alice"))
+        got = totp.parse(f"otpauth://totp/Steam:alice?secret={KEY}&period=30&digits=5&issuer=Steam"
+                         "&encoder=steam")  # KeePassXC writes the real digit count
+        self.assertEqual((got["kind"], got["digits"], got["period"]), ("steam", 5, 30))
         got = totp.parse(f"otpauth://totp/Steam:me?secret={KEY}&issuer=Steam&encoder=STEAM")
         self.assertEqual((got["kind"], got["digits"], got["algorithm"]), ("steam", 5, "SHA1"))
         self.assertEqual((got["issuer"], got["account"]), ("Steam", "me"))
@@ -303,8 +312,10 @@ class MigrationTests(unittest.TestCase):
         entries, _ = totp.parse_migration(migration_link(migration([
             otp_parameters(type=0, counter=0),
             otp_parameters(name="x", type=1),
+            otp_parameters(name="y", type=0, counter=7),  # an unspecified type with a counter is hotp
         ])))
-        self.assertEqual([(e["kind"], e["counter"]) for e in entries], [("totp", 0), ("hotp", 0)])
+        self.assertEqual([(e["kind"], e["counter"]) for e in entries],
+                         [("totp", 0), ("hotp", 0), ("hotp", 7)])
 
     def test_forged_or_truncated_payloads_fail_closed(self):
         good = migration([otp_parameters()])
@@ -315,7 +326,8 @@ class MigrationTests(unittest.TestCase):
                     migration_link(field(1, 3, 0)),  # a group: nesting abuse
                     migration_link(field(1, 4, 0)),
                     "otpauth-migration://offline?data=",
-                    migration_link(b"\x0a\x05\x0a\x04ab")):  # an inner length past the end
+                    migration_link(b"\x0a\x05\x0a\x04ab"),  # an inner length past the end
+                    "otpauth-migration://[x/offline?data=abc"):  # urlsplit itself refuses it
             with self.assertRaises(OtpError, msg=bad):
                 totp.parse_migration(bad)
         with self.assertRaisesRegex(OtpError, "not a migration link"):

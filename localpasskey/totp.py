@@ -133,9 +133,13 @@ def parse(text: str) -> dict:
         params.setdefault(key.lower(), value)
 
     if kind == "steam":
-        # otpauth://steam/BASE32 has the key in the path and no label.
-        result["secret"] = decode_secret(params["secret"] if "secret" in params else url.path[1:])
-        result["issuer"] = _clean_label(params.get("issuer", ""))
+        if "secret" in params:
+            result["secret"] = decode_secret(params["secret"])
+            result["issuer"] = _clean_label(params.get("issuer") or issuer)
+            result["account"] = _clean_label(account)
+        else:
+            # otpauth://steam/BASE32 has the key in the path and no label.
+            result["secret"] = decode_secret(url.path[1:])
         return _steam(result)
 
     encoder = params.get("encoder", "").strip().lower()
@@ -146,6 +150,11 @@ def parse(text: str) -> dict:
     result["secret"] = decode_secret(params["secret"])
     if params.get("issuer", "").strip():
         issuer = params["issuer"]
+    result["issuer"] = _clean_label(issuer)
+    result["account"] = _clean_label(account)
+    if encoder == "steam":
+        # Before the checks below: its own alphabet, and producers write digits=5.
+        return _steam(result)
     if kind == "hotp":
         if "counter" not in params:
             raise OtpError("the link has no counter parameter")
@@ -166,10 +175,6 @@ def parse(text: str) -> dict:
         if not MIN_PERIOD <= period <= MAX_PERIOD:
             raise OtpError(f"the period parameter must be {MIN_PERIOD} to {MAX_PERIOD} seconds")
         result["period"] = period
-    result["issuer"] = _clean_label(issuer)
-    result["account"] = _clean_label(account)
-    if encoder == "steam":
-        return _steam(result)  # its own alphabet: no algorithm, digits or period to read
     return result
 
 
@@ -227,7 +232,10 @@ def parse_migration(text: str) -> Tuple[list, list]:
     text = text.strip()
     if not text.lower().startswith("otpauth-migration://"):
         raise OtpError("not a migration link")
-    query = urlsplit(text).query
+    try:
+        query = urlsplit(text).query
+    except ValueError:
+        raise OtpError("this migration link is damaged") from None
     data = ""
     for part in query.split("&"):
         name, _, value = part.partition("=")
