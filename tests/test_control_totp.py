@@ -343,6 +343,20 @@ class TotpControlTests(unittest.TestCase):
         self.assertEqual(steam["period"], 30)
         self.assertIn("remaining", steam)
 
+    def test_code_all_with_only_hotp_codes_returns_nothing_and_keeps_the_unlock(self):
+        self.add(kind="hotp", counter=7)
+        with self.assertRaisesRegex(ControlError, "locked"), \
+                patch("localpasskey.control.time.monotonic", return_value=1000.0):
+            self.handle({"action": "code", "all": True})
+        with patch("localpasskey.control.time.monotonic", return_value=1000.0):
+            self.unlock()
+        with patch("localpasskey.control.time.monotonic", return_value=1000.0 + UNLOCK_IDLE - 1):
+            self.assertEqual(self.handle({"action": "code", "all": True})["codes"], [])
+        with patch("localpasskey.control.time.monotonic", return_value=1000.0 + UNLOCK_IDLE + 10):
+            self.assertEqual(self.handle({"action": "code", "all": True})["codes"], [])
+            self.assertTrue(self.handle({"action": "status"})["unlocked"],
+                            "the empty reply still extended the unlock")
+
     def test_next_advances_an_hotp_counter_and_reads_only_one_code(self):
         hotp_entry = self.add(kind="hotp", counter=3)
         totp_entry = self.add(site="other.example")
@@ -363,6 +377,14 @@ class TotpControlTests(unittest.TestCase):
             with self.subTest(request=request), self.assertRaisesRegex(ControlError, problem):
                 self.handle({"action": "next", **request})
         self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].counter, 5, "refusals change nothing")
+
+    def test_a_counter_that_cannot_be_saved_yields_no_code(self):
+        hotp_entry = self.add(kind="hotp", counter=4)
+        self.unlock()
+        with patch.object(self.store, "_write_totp", side_effect=StoreError("disk full")):
+            with self.assertRaisesRegex(StoreError, "disk full"):
+                self.handle({"action": "next", "ids": [hotp_entry["id"]]})
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].counter, 4)
 
     def test_next_asks_for_the_password_like_code(self):
         hotp_entry = self.add(kind="hotp", counter=0)
@@ -411,6 +433,16 @@ class TotpControlTests(unittest.TestCase):
         added = self.handle({"action": "add", "entry": self.entry(kind="steam", digits=5)})["added"]
         self.assertEqual((added["kind"], added["digits"]), ("steam", 5))
         self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].kind, "steam")
+
+    def test_a_steam_entry_keeps_a_30_second_period(self):
+        added = self.add(site="steamcommunity.com", kind="steam", digits=5, period=60)
+        self.assertEqual(added["period"], 30)
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].period, 30)
+        self.unlock()
+        with patch("localpasskey.control.time.time", return_value=1700000060.0):
+            [steam] = self.handle({"action": "code", "all": True})["codes"]
+        self.assertEqual(steam["code"], totp.steam_code(SECRET, 1700000060 // 30))
+        self.assertEqual(steam["remaining"], 10)
 
     def test_code_records_carry_kind_and_counter_but_plain_totp_does_not(self):
         hotp_entry = self.add(kind="hotp", counter=9)

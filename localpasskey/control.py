@@ -745,24 +745,27 @@ class ControlServer:
         if request.get("all") is True and not next_only:
             # Showing every code must not use up HOTP counters: only an explicit ID does.
             entries = [e for e in entries if e.kind != "hotp"]
-        chosen = self._select(request, entries, *CODE_WORDS)
+        # Showing all the codes with only HOTP ones live is not an error: the reply is empty,
+        # and the request still extends the unlock.
+        chosen = self._select(request, entries, *CODE_WORDS, empty_ok=request.get("all") is True and not next_only)
         if next_only and len(chosen) != 1:
             raise ControlError("next shows one authenticator code at a time")
         if next_only and chosen[0].kind != "hotp":
             raise ControlError("only an HOTP code has a next code")
-        asked = chosen[0].id.hex()
+        asked = chosen[0].id.hex() if chosen else None
         key = self._unlock_key(pid, uid)
         unlocked = not require_auth or self._unlocked(pid, uid)
         if not unlocked:
             if not request.get("ask"):
                 raise ControlError("authenticator codes are locked")
-            what = (f"the authenticator code for {_code_label(chosen[0])}" if len(chosen) == 1
-                    else f"{len(chosen)} authenticator codes")
-            # One-shot: no unlock is recorded, the next request asks again.
-            self._approve(pid, uid, f"Show {what}?", "not shown", ACTION_TOTP)
-            # Another request may have changed things during the dialog.
-            live = {e.id: e for e in self.store.totp_entries(target_uid, username)}
-            chosen = [live[e.id] for e in chosen if e.id in live]
+            if chosen:  # nothing to show, nothing to approve
+                what = (f"the authenticator code for {_code_label(chosen[0])}" if len(chosen) == 1
+                        else f"{len(chosen)} authenticator codes")
+                # One-shot: no unlock is recorded, the next request asks again.
+                self._approve(pid, uid, f"Show {what}?", "not shown", ACTION_TOTP)
+                # Another request may have changed things during the dialog.
+                live = {e.id: e for e in self.store.totp_entries(target_uid, username)}
+                chosen = [live[e.id] for e in chosen if e.id in live]
         now = time.time()  # the daemon's clock, never the client's
         codes = []
         for entry in chosen:

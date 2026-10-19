@@ -33,7 +33,10 @@ def request(payload: dict, path: Optional[str] = None, timeout: float = 180) -> 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC) as sock:
             sock.settimeout(timeout)  # 180 s by default: allow the management authentication dialog to finish.
             sock.connect(path)
-            sock.sendall(line)
+            try:
+                sock.sendall(line)
+            except BrokenPipeError:
+                pass  # the service may answer BUSY and close before reading the request; read that reply
             with sock.makefile("rb") as stream:
                 data = stream.readline()
     except (FileNotFoundError, ConnectionRefusedError):
