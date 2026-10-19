@@ -406,6 +406,17 @@ class Details(QFrame):
         self.purge_button.setEnabled(not busy)
 
 
+class CodeLabel(QLabel):
+    """The large code in the details panel: a double-click copies it, as the button does."""
+
+    def __init__(self, window):
+        super().__init__(HIDDEN_CODE)
+        self.window = window
+
+    def mouseDoubleClickEvent(self, event):
+        self.window.copy_code()
+
+
 class CodeDetails(QFrame):
     """One authenticator code: its current value, a countdown and its labels."""
 
@@ -417,7 +428,7 @@ class CodeDetails(QFrame):
         self.entry = None
         heading = self._heading()
 
-        self.code = QLabel(HIDDEN_CODE)
+        self.code = CodeLabel(window)
         self.code.setTextFormat(Qt.TextFormat.PlainText)
         font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         font.setBold(True)
@@ -426,7 +437,7 @@ class CodeDetails(QFrame):
         self.countdown = QLabel()
         self.countdown.setStyleSheet(f"color: {PALETTE.COLOR_TEXT_3};")
         self.copy_button = QPushButton("Copy Code")
-        self.copy_button.clicked.connect(window.copy_code)
+        self.copy_button.clicked.connect(lambda: window.copy_code())
         value = QHBoxLayout()
         value.setSpacing(14)
         value.addWidget(self.code)
@@ -971,6 +982,7 @@ class Window(QMainWindow):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.selectionModel().selectionChanged.connect(self._on_selection)
+        self.table.doubleClicked.connect(self._on_double_click)
         self.table.header().setStretchLastSection(False)
         self._size_columns()
 
@@ -1495,14 +1507,19 @@ class Window(QMainWindow):
             self.table.clearSelection()
         self.code_menu.exec(self.table.viewport().mapToGlobal(position))
 
+    def _on_double_click(self, index):
+        """A double-click copies that row's code, as Copy Code does; nothing when it is not known yet."""
+        if self._codes_tab and not self._trash and index.isValid():
+            self.copy_code(index.data(CRED_ROLE)["id"])
+
     def copy(self, text, what):
         QGuiApplication.clipboard().setText(text)
         self.statusBar().showMessage(f"{what} copied", 3000)
 
-    def copy_code(self):
-        """Copy the selected code, marked secret for clipboard managers, for 30 seconds."""
-        entry = self.code_details.entry if self._codes_tab and self._selected_id else None
-        value = self._values.get(entry["id"]) if entry else None
+    def copy_code(self, entry_id=None):
+        """Copy a code, marked secret for clipboard managers, for 30 seconds."""
+        entry_id = entry_id or (self.code_details.entry["id"] if self._codes_tab and self._selected_id else None)
+        value = self._values.get(entry_id)
         if value is None:
             return
         data = QMimeData()

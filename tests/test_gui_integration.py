@@ -994,6 +994,35 @@ class CodesTabTests(unittest.TestCase):
         self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
         self.assertEqual(self.window.statusBar().currentMessage(), "Authenticator code added")
 
+    def test_double_click_copies_that_row_s_code(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        index = self.window.proxy.index(self.row_of("google.com"), 0)
+        self.select("github.com")
+        self.window._on_double_click(index)  # what the table's doubleClicked signal calls
+        clipboard = self.app.clipboard()
+        self.assertEqual(clipboard.text(), self.expected("google.com"), "the double-clicked row, not the selection")
+        self.assertEqual(bytes(clipboard.mimeData().data("x-kde-passwordManagerHint")), b"secret")
+        self.assertEqual(self.window.statusBar().currentMessage(), "Code copied; the clipboard is cleared in 30 s")
+
+    def test_double_click_does_nothing_while_the_code_is_not_known(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        index = self.window.proxy.index(self.row_of("github.com"), 0)
+        self.window._values = {}
+        QApplication.clipboard().clear()
+        before = self.window.statusBar().currentMessage()
+        self.window._on_double_click(index)
+        self.assertEqual(self.app.clipboard().text(), "", "no code to copy")
+        self.assertEqual(self.window.statusBar().currentMessage(), before, "and no error either")
+
+    def test_double_click_on_the_big_code_copies_it_too(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.select("github.com")
+        self.window.code_details.code.mouseDoubleClickEvent(None)
+        self.assertEqual(self.app.clipboard().text(), self.expected("github.com"))
+
     def test_trash_lists_deleted_codes_and_purge_needs_the_site_typed(self):
         self.open_codes()
         self.select("github.com")
