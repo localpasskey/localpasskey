@@ -6,6 +6,7 @@ from localpasskey.totp import OtpError
 
 KEY = "JBSWY3DPEHPK3PXP"  # b"Hello!\xde\xad\xbe\xef"
 SECRET = b"Hello!\xde\xad\xbe\xef"
+STEAM_SECRET = base64.b64decode("zvIayp3JPvtvX/QGHqsqKBk/44s=")
 
 
 class CodeTests(unittest.TestCase):
@@ -60,8 +61,7 @@ class CodeTests(unittest.TestCase):
         self.assertEqual(totp.steam_code(secret, 1511200518 // 30), "FR8RV")
         self.assertEqual(totp.steam_code(secret, 1511200714 // 30), "9P3VP")
         # steamguard-cli
-        secret = base64.b64decode("zvIayp3JPvtvX/QGHqsqKBk/44s=")
-        self.assertEqual(totp.steam_code(secret, 1616374841 // 30), "2F9J5")
+        self.assertEqual(totp.steam_code(STEAM_SECRET, 1616374841 // 30), "2F9J5")
 
     def test_default_now_and_six_digits(self):
         got, remaining = totp.code(SECRET)
@@ -223,6 +223,111 @@ class ParseTests(unittest.TestCase):
             with self.assertRaises(OtpError) as caught:
                 totp.parse(text)
             self.assertNotIn("JBSWY3DP", str(caught.exception))
+
+
+def varint(value):
+    out = bytearray()
+    while value > 0x7F:
+        out.append(value & 0x7F | 0x80)
+        value >>= 7
+    out.append(value)
+    return bytes(out)
+
+
+def field(number, wire_type, value):
+    key = varint(number << 3 | wire_type)
+    return key + (varint(len(value)) + value if wire_type == 2 else varint(value))
+
+
+def migration(entries):
+    """The bytes of a Google Authenticator export, hand-encoded."""
+    payload = b"".join(field(1, 2, entry) for entry in entries)
+    return payload + field(2, 0, 1) + field(3, 0, len(entries)) + field(5, 2, b"batch")
+
+
+def otp_parameters(secret=b"Hello!\xde\xad\xbe\xef", **values):
+    entry = field(1, 2, secret)
+    for number, value in ((2, values.get("name")), (3, values.get("issuer")),
+                          (4, values.get("algorithm")), (5, values.get("digits")),
+                          (6, values.get("type")), (7, values.get("counter"))):
+        if value is not None:
+            entry += field(number, 2 if isinstance(value, str) else 0,
+                           value.encode() if isinstance(value, str) else value)
+    return entry
+
+
+def migration_link(payload):
+    return "otpauth-migration://offline?data=" + base64.b64encode(payload).decode()
+
+
+class MigrationTests(unittest.TestCase):
+    def test_totp_hotp_and_skipped(self):
+        payload = migration([
+            otp_parameters(name="GitHub:alice", issuer="GitHub", algorithm=1, digits=2, type=2),
+            otp_parameters(secret=STEAM_SECRET, name="Bank:me", algorithm=1, type=1, counter=7),
+            otp_parameters(name="Old:me", algorithm=4, type=2),  # MD5
+            otp_parameters(name="Long:me"),  # unspecified digits and type
+            otp_parameters(secret=b"short", name="Tiny:me"),
+        ])
+        entries, skipped = totp.parse_migration(migration_link(payload))
+        base = {"algorithm": "SHA1", "digits": 6, "period": 30, "kind": "totp", "counter": 0}
+        self.assertEqual(entries, [
+            dict(base, secret=SECRET, issuer="GitHub", account="alice", digits=8),
+            dict(base, secret=STEAM_SECRET, issuer="Bank", account="me", kind="hotp", counter=7),
+            dict(base, secret=SECRET, issuer="Long", account="me"),
+        ])
+        self.assertEqual([(name, reason) for name, reason in skipped], [
+            ("Old:me", "MD5-based codes are not supported"),
+            ("Tiny:me", "the setup key is too short"),
+        ])
+
+    def test_base64_plus_and_percent_encoding(self):
+        # parse_qsl would turn "+" into a space; unquote, which sees it as a Base64 digit, must not.
+        secret = b"\xfb" * 32
+        payload = migration([otp_parameters(secret=secret)])
+        encoded = base64.b64encode(payload).decode()
+        self.assertIn("+", encoded)
+        link = "otpauth-migration://offline?data=" + encoded
+        self.assertEqual(totp.parse_migration(link)[0][0]["secret"], secret)
+        link = "otpauth-migration://offline?data=" + encoded.replace("+", "%2B").replace("/", "%2F")
+        self.assertEqual(totp.parse_migration(link)[0][0]["secret"], secret)
+
+    def test_issuer_field_beats_the_name_prefix(self):
+        entries, _ = totp.parse_migration(migration_link(migration([
+            otp_parameters(name="Old:me", issuer="New"),
+            otp_parameters(name="No colon"),
+        ])))
+        self.assertEqual([(e["issuer"], e["account"]) for e in entries], [("New", "me"), ("", "No colon")])
+
+    def test_hotp_without_counter_is_totp(self):
+        entries, _ = totp.parse_migration(migration_link(migration([
+            otp_parameters(type=0, counter=0),
+            otp_parameters(name="x", type=1),
+        ])))
+        self.assertEqual([(e["kind"], e["counter"]) for e in entries], [("totp", 0), ("hotp", 0)])
+
+    def test_forged_or_truncated_payloads_fail_closed(self):
+        good = migration([otp_parameters()])
+        totp.parse_migration(migration_link(good))
+        for bad in (migration_link(good[:-1]), migration_link(good[:5]), "otpauth-migration://offline",
+                    migration_link(b"\x0a" + b"\xff" * 11),  # a varint past 64 bits
+                    "otpauth-migration://offline?data=%%%",
+                    migration_link(field(1, 3, 0)),  # a group: nesting abuse
+                    migration_link(field(1, 4, 0)),
+                    "otpauth-migration://offline?data=",
+                    migration_link(b"\x0a\x05\x0a\x04ab")):  # an inner length past the end
+            with self.assertRaises(OtpError, msg=bad):
+                totp.parse_migration(bad)
+        with self.assertRaisesRegex(OtpError, "not a migration link"):
+            totp.parse_migration(f"otpauth://totp/x?secret={KEY}")
+
+    def test_migration_entry_id_is_deterministic(self):
+        first = totp.migration_entry_id("totp", "GitHub", "alice", SECRET)
+        self.assertEqual(len(first), 16)
+        self.assertEqual(first, totp.migration_entry_id("totp", "GitHub", "alice", SECRET))
+        self.assertEqual(len({first, totp.migration_entry_id("hotp", "GitHub", "alice", SECRET),
+                              totp.migration_entry_id("totp", "GitHub", "bob", SECRET),
+                              totp.migration_entry_id("totp", "GitHub", "alice", b"other")}), 4)
 
 
 class SiteTests(unittest.TestCase):

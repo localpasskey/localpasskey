@@ -27,6 +27,7 @@ DEFAULT_ALGORITHM, DEFAULT_DIGITS, DEFAULT_PERIOD = "SHA1", 6, 30
 MIN_SECRET_BYTES, MAX_SECRET_BYTES = 10, 128  # 80 bits: below RFC 4226's 128, but common in the wild
 MAX_INPUT = 8192  # characters of pasted text: a migration link holds a batch of codes
 MAX_COUNTER = 2**53 - 1  # the largest counter a JavaScript client handles exactly
+MAX_MIGRATION_ENTRIES = 64  # more than Google Authenticator's batch of 10, less than a flood
 MAX_LABEL = MAX_LABEL_LENGTH  # site, issuer and account
 STEAM_ALPHABET, STEAM_DIGITS = "23456789BCDFGHJKMNPQRTVWXY", 5
 
@@ -170,6 +171,140 @@ def parse(text: str) -> dict:
     if encoder == "steam":
         return _steam(result)  # its own alphabet: no algorithm, digits or period to read
     return result
+
+
+class _BadPayload(Exception):
+    """Protobuf bytes that do not decode; fail closed, never guess."""
+
+
+def _varint(data: memoryview, pos: int) -> Tuple[int, int]:
+    value = 0
+    for shift in range(0, 70, 7):
+        if pos >= len(data):
+            raise _BadPayload("truncated")
+        byte = data[pos]
+        pos += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            if shift == 63 and value >> 64:  # a 10th byte past 64 bits is an overflow
+                raise _BadPayload("overflow")
+            return value, pos
+    raise _BadPayload("overlong")
+
+
+def _fields(data: bytes):
+    """The (number, value) pairs of a protobuf message; length-delimited values are bytes."""
+    view, pos = memoryview(data), 0
+    while pos < len(view):
+        key, pos = _varint(view, pos)
+        number, wire = key >> 3, key & 7
+        if not number:
+            raise _BadPayload("field 0")
+        if wire == 0:
+            value, pos = _varint(view, pos)
+        elif wire == 2:
+            size, pos = _varint(view, pos)
+            if size > len(view) - pos:
+                raise _BadPayload("length past the end")
+            value, pos = bytes(view[pos : pos + size]), pos + size
+        else:
+            raise _BadPayload("wire type")  # no fixed-width fields, no groups
+        yield number, value
+
+
+ALGORITHM_NAMES = {1: "SHA1", 2: "SHA256", 3: "SHA512"}  # 4 is MD5, which is refused
+MIGRATION_DIGITS = {1: 6, 2: 8}
+
+
+def parse_migration(text: str) -> Tuple[list, list]:
+    """The entries of a Google Authenticator export link, and the codes skipped.
+
+    Returns ``(entries, skipped)``: dicts like ``parse``'s but with the secret as
+    bytes, which the caller encodes, and ``(label, reason)`` pairs. The link is
+    protobuf in Base64; there is no dependency to decode it."""
+    if len(text) > MAX_INPUT:
+        raise OtpError("the text is too long for a setup key or link")
+    text = text.strip()
+    if not text.lower().startswith("otpauth-migration://"):
+        raise OtpError("not a migration link")
+    query = urlsplit(text).query
+    data = ""
+    for part in query.split("&"):
+        name, _, value = part.partition("=")
+        if name.lower() == "data":
+            # unquote, not parse_qsl: "+" is a Base64 digit here, not a space.
+            data = unquote(value)
+            break
+    try:
+        payload = base64.b64decode(data + "=" * (-len(data) % 4), validate=False)
+    except (binascii.Error, ValueError):
+        raise OtpError("this migration link is damaged") from None
+    try:
+        return _migration_entries(payload)
+    except (_BadPayload, UnicodeDecodeError):
+        raise OtpError("this migration link is damaged") from None
+
+
+def _migration_entries(payload: bytes) -> Tuple[list, list]:
+    messages = [value for number, value in _fields(payload) if number == 1]
+    if not messages:
+        raise OtpError("this migration link holds no codes")
+    if len(messages) > MAX_MIGRATION_ENTRIES:
+        raise OtpError("this migration link holds too many codes")
+    entries, skipped = [], []
+    for message in messages:
+        if not isinstance(message, bytes):
+            raise _BadPayload("not a message")
+        wanted, secret = {}, b""
+        for number, value in _fields(message):
+            if number == 1 and isinstance(value, bytes):
+                secret = value
+            elif number in (2, 3):
+                if not isinstance(value, bytes):
+                    raise _BadPayload("not text")
+                wanted[number] = value.decode("utf-8")
+            elif number in (4, 5, 6, 7):
+                if not isinstance(value, int):
+                    raise _BadPayload("not a number")
+                wanted[number] = value
+        # Fail closed on an enum this build does not know: a guessed code is no code.
+        if (wanted.get(4, 0) not in (0, 1, 2, 3, 4) or wanted.get(5, 0) not in (0, 1, 2)
+                or wanted.get(6, 0) not in (0, 1, 2)):
+            raise _BadPayload("enum")
+        label = _clean_label(wanted.get(2, ""))
+        issuer, account = label.split(":", 1) if ":" in label else ("", label)
+        issuer = _clean_label(wanted.get(3, "")) or issuer
+        if wanted.get(4) == 4:
+            skipped.append((label, "MD5-based codes are not supported"))
+            continue
+        if len(secret) < MIN_SECRET_BYTES:
+            skipped.append((label, "the setup key is too short"))
+            continue
+        if len(secret) > MAX_SECRET_BYTES:
+            skipped.append((label, "the setup key is too long"))
+            continue
+        counter = wanted.get(7, 0)
+        if not 0 <= counter <= MAX_COUNTER:
+            raise _BadPayload("counter")
+        kind = {1: "hotp", 2: "totp"}.get(wanted.get(6), "hotp" if counter else "totp")
+        entries.append({
+            "secret": secret,
+            "issuer": issuer,
+            "account": account,
+            "algorithm": ALGORITHM_NAMES.get(wanted.get(4), DEFAULT_ALGORITHM),
+            "digits": MIGRATION_DIGITS.get(wanted.get(5), DEFAULT_DIGITS),
+            "period": DEFAULT_PERIOD,
+            "kind": kind,
+            "counter": counter if kind == "hotp" else 0,
+        })
+    return entries, skipped
+
+
+def migration_entry_id(kind: str, issuer: str, account: str, secret: bytes) -> bytes:
+    """The stable 16-byte ID of a migration entry: importing the same batch twice is idempotent."""
+    data = b"\0".join([kind.encode(), issuer.encode("utf-8", "surrogateescape"),
+                       account.encode("utf-8", "surrogateescape"), secret])
+    return hashlib.blake2b(data, key=b"lpk-migration", digest_size=16).digest()
 
 
 def _truncate(secret: bytes, counter: int, algorithm: str) -> int:
