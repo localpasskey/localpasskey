@@ -378,6 +378,14 @@ class TotpControlTests(unittest.TestCase):
                 self.handle({"action": "next", **request})
         self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].counter, 5, "refusals change nothing")
 
+    def test_a_counter_that_cannot_be_saved_yields_no_code(self):
+        hotp_entry = self.add(kind="hotp", counter=4)
+        self.unlock()
+        with patch.object(self.store, "_write_totp", side_effect=StoreError("disk full")):
+            with self.assertRaisesRegex(StoreError, "disk full"):
+                self.handle({"action": "next", "ids": [hotp_entry["id"]]})
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].counter, 4)
+
     def test_next_asks_for_the_password_like_code(self):
         hotp_entry = self.add(kind="hotp", counter=0)
         self.polkit.verdict = Verdict.DENIED
