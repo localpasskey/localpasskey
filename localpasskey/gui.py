@@ -1317,7 +1317,8 @@ class Window(QMainWindow):
 
     def _rebuild(self):
         chosen = list(self._chosen)  # the rows below are new; _restore selects these again
-        self.table.clearSelection()
+        if self.table.model() is not None:
+            self.table.clearSelection()  # before the model goes: clearing after it does nothing
         self.model.setHorizontalHeaderLabels(
             TRASH_COLUMNS if self._trash else CODE_COLUMNS if self._codes_tab else COLUMNS)
         self.proxy.setSourceModel(None)  # one sort and filter pass, not one per row
@@ -1486,9 +1487,13 @@ class Window(QMainWindow):
         self.side.setCurrentWidget(self.message)
 
     def _context_menu(self, position):
-        if self.table.indexAt(position).isValid():
-            menu = self.code_menu if self._codes_tab else self.passkey_menu
-            menu.exec(self.table.viewport().mapToGlobal(position))
+        if not self._codes_tab:  # passkeys are added from a browser, so only a row has a menu
+            if self.table.indexAt(position).isValid():
+                self.passkey_menu.exec(self.table.viewport().mapToGlobal(position))
+            return
+        if not self.table.indexAt(position).isValid():  # empty space: Add Code is the only action
+            self.table.clearSelection()
+        self.code_menu.exec(self.table.viewport().mapToGlobal(position))
 
     def copy(self, text, what):
         QGuiApplication.clipboard().setText(text)

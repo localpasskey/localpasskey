@@ -977,6 +977,23 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(sorted(e.issuer for e in self.server.store.totp_trash(self.uid, self.username)),
                          ["GitHub", "GitLab", "Google"])
 
+    def test_ctrl_n_adds_a_code_on_the_codes_tab_and_does_nothing_on_the_passkeys_tab(self):
+        def accepted(dialog):
+            dialog.key.setText("JBSWY3DPEHPK3PXP")
+            dialog.save_button.click()
+            return gui.QDialog.DialogCode.Accepted
+
+        self.window.tabs.setCurrentIndex(0)
+        self.wait_for(lambda: not self.window._refreshing)
+        with patch.object(gui.CodeDialog, "exec", accepted):
+            QTest.keyClick(self.window, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(self.window.findChildren(gui.CodeDialog), [], "the dialog never opened")
+        self.open_codes()
+        with patch.object(gui.CodeDialog, "exec", accepted):
+            QTest.keyClick(self.window, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
+        self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+        self.assertEqual(self.window.statusBar().currentMessage(), "Authenticator code added")
+
     def test_trash_lists_deleted_codes_and_purge_needs_the_site_typed(self):
         self.open_codes()
         self.select("github.com")
