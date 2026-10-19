@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 try:
-    from PyQt6.QtCore import QEvent, QItemSelectionModel, Qt, QTimer
+    from PyQt6.QtCore import QEvent, QItemSelectionModel, QPoint, Qt, QTimer
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
@@ -1013,11 +1013,48 @@ class CodesTabTests(unittest.TestCase):
         self.wait_for(lambda: len(self.window._values) == 4)
         index = self.window.proxy.index(self.row_of("google.com"), 0)
         self.select("github.com")
-        self.window._on_double_click(index)  # what the table's doubleClicked signal calls
+        self.window.table.doubleClicked.emit(index)
         clipboard = self.app.clipboard()
         self.assertEqual(clipboard.text(), self.expected("google.com"), "the double-clicked row, not the selection")
         self.assertEqual(bytes(clipboard.mimeData().data("x-kde-passwordManagerHint")), b"secret")
         self.assertEqual(self.window.statusBar().currentMessage(), "Code copied; the clipboard is cleared in 30 s")
+
+    def test_double_click_on_any_column_copies_that_row_s_code(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 4)
+        self.select("github.com")
+        for column in (1, 2):  # the account and the code cells; only column 0 carries CRED_ROLE
+            with self.subTest(column=column):
+                self.app.clipboard().clear()
+                self.window.table.doubleClicked.emit(self.window.proxy.index(self.row_of("google.com"), column))
+                self.assertEqual(self.app.clipboard().text(), self.expected("google.com"))
+
+    def test_right_click_opens_the_code_menu_on_empty_space_and_on_a_row(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 4)
+        table = self.window.table
+        below = table.visualRect(self.window.proxy.index(self.window.proxy.rowCount() - 1, 0)).bottomLeft() \
+            + QPoint(2, 4)
+        with patch.object(self.window.code_menu, "exec") as code_menu:
+            self.select("github.com")
+            self.window._context_menu(below)  # empty space: Add Code must still be reachable
+            code_menu.assert_called_once()
+            self.assertEqual(table.selectionModel().selectedRows(), [])
+            code_menu.reset_mock()
+            self.window._context_menu(table.visualRect(self.window.proxy.index(self.row_of("google.com"), 0)).center())
+            code_menu.assert_called_once()
+        self.window.tabs.setCurrentIndex(0)
+        self.wait_for(lambda: not self.window._refreshing)
+        below = table.visualRect(self.window.proxy.index(self.window.proxy.rowCount() - 1, 0)).bottomLeft() \
+            + QPoint(2, 4)
+        row = table.visualRect(self.window.proxy.index(0, 0)).center()
+        with patch.object(self.window.passkey_menu, "exec") as passkey_menu, \
+                patch.object(self.window.code_menu, "exec") as code_menu:
+            self.window._context_menu(below)  # passkeys are added from a browser: no menu on empty space
+            passkey_menu.assert_not_called()
+            self.window._context_menu(row)
+            passkey_menu.assert_called_once()
+            code_menu.assert_not_called()
 
     def test_double_click_does_nothing_while_the_code_is_not_known(self):
         self.open_codes()

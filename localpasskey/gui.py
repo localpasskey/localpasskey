@@ -1553,7 +1553,7 @@ class Window(QMainWindow):
     def _on_double_click(self, index):
         """A double-click copies that row's code, as Copy Code does; nothing when it is not known yet."""
         if self._codes_tab and not self._trash and index.isValid():
-            self.copy_code(index.data(CRED_ROLE)["id"])
+            self.copy_code(index.siblingAtColumn(0).data(CRED_ROLE)["id"])
 
     def copy(self, text, what):
         QGuiApplication.clipboard().setText(text)
