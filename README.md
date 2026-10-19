@@ -98,7 +98,7 @@ localpasskey/
 sudo apt install debhelper dh-python python3-cryptography python3-gi python3-fido2 \
     python3-pyqt6 python3-qdarkstyle
 make deb                      # runs the test suite, then builds the package into dist/
-sudo apt install ./dist/localpasskey_0.4.0_all.deb
+sudo apt install ./dist/localpasskey_0.5.0_all.deb
 ```
 
 The one `localpasskey` package holds the service, the command-line tool, the

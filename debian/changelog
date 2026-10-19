@@ -1,3 +1,30 @@
+localpasskey (0.5.0) unstable; urgency=medium
+
+  * Feature: counter-based (HOTP) authenticator codes. Paste an
+    otpauth://hotp/ link with its counter, or import one from a Google
+    Authenticator export; the counter is saved in the service every time
+    you ask for the next code (`localpasskey totp code`, or Next Code in
+    the window), and the codes tab never advances it in the background.
+  * Feature: Steam Guard codes. Paste a link another app exported
+    (steam://KEY, otpauth://steam/... or otpauth://totp/...&encoder=steam).
+    Steam gives the shared secret to no other app, so LocalPasskey can
+    only use a secret you already have from such an export.
+  * Feature: import Google Authenticator's export links
+    (otpauth-migration://offline?data=...). One link holds a batch of
+    codes: paste it into Add Code or `localpasskey totp add`, review the
+    plan and import them (HOTP entries included) with one password
+    prompt. MD5-based entries are skipped with a reason. The export is
+    shown as a QR code only, so decode it locally first.
+  * The window: Ctrl+N adds a code on the Authenticator Codes tab;
+    right-clicking the code list offers Add Code; Delete moves every
+    selected row to the trash in one prompt, for passkeys and codes
+    alike; double-clicking a code row (or the large code) copies it.
+  * Backups carry HOTP and Steam codes as format version 3; a backup of
+    only time-based codes is still version 2, and 0.4.0 refuses both
+    new kinds instead of computing a wrong code for them.
+
+ -- LocalPasskey Maintainers <maintainers@localpasskey.invalid>  Mon, 19 Oct 2026 10:26:46 +0000
+
 localpasskey (0.4.0) unstable; urgency=medium
 
   * Feature: authenticator codes (TOTP). Paste a site's otpauth://totp/
