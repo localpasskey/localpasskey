@@ -209,8 +209,11 @@ deletes a passkey: passkey changes always ask for your password.
 .TP
 .B totp list
 Show your authenticator codes, but not the codes themselves: an ID, the
-site, the issuer, the account, the type (6 or 8 digits, the period, and the
-algorithm when it is not SHA1), and when the code was added.
+site, the issuer, the account, the type, and when the code was added. The
+type is the number of digits and the period, with the algorithm when it is
+not SHA1; an HOTP code shows its next counter instead of a period, and a
+Steam code shows
+.BR Steam .
 .B \-\-json
 prints all details.
 .B \-\-trash
@@ -245,22 +248,35 @@ before polkit asks for your password. When the setup key comes from standard
 input, the confirmation is read from the terminal; when there is none, the
 command stops before saving anything unless
 .B \-y
-is given. Counter-based (HOTP) codes, Steam codes
+is given.
+.br
+.B otpauth://hotp/
+links are saved as counter-based codes, starting at their
+.B counter
+parameter.
 .RB ( steam://
 links and links with
-.BR \%encoder=steam ),
-links with any other
+.B \%encoder=steam )
+are saved as Steam codes; LocalPasskey has no way to fetch a Steam secret, so
+it must come from another app's Steam Guard setup. A link with any other
 .B encoder
-and
+is refused.
+.br
+An
 .B otpauth\-migration
-links are refused. The website is what
+link (Google Authenticator's *Transfer accounts* → *Export accounts*) holds
+several codes: the command shows the plan, asks once, and lists the codes it
+cannot read, such as MD5-based ones, with the reason. The website is what
 .B \-\-site
 selectors match, after the same reduction to a host name; it may be left
 empty.
 .TP
 .BI "totp code " query
 Print the current code of one authenticator code on standard output, and how
-many more seconds it is valid on standard error.
+many more seconds it is valid on standard error. An HOTP code has no time
+window: standard error shows the counter it used instead, and asking for the
+code moves it on to its next counter, as the site does. Showing every code
+at once never does.
 .I query
 is an ID prefix of at least four characters or part of the site, issuer or
 account (case does not matter); if it matches several codes, the command
@@ -354,8 +370,9 @@ both. If the service cannot read your codes, the export stops before your
 password is asked for and suggests
 .BR \-\-no\-codes ,
 which exports the passkeys alone. A backup with codes is format version 2, which LocalPasskey 0.3.1 and
-earlier refuse to open rather than drop the codes; a backup without codes is
-unchanged. CXF files never hold codes, and with
+earlier refuse to open rather than drop the codes; one that also holds an
+HOTP or Steam code is version 3, for the same reason. A backup of passkeys,
+or of passkeys and plain time-based codes, is unchanged. CXF files never hold codes, and with
 .B \-\-format cxf
 the command says so on standard error when you have any.
 .TP

@@ -310,11 +310,16 @@ scheme, path or port, such as `https://github.com/login` or
 selectors match the same way. It then shows what it will save and asks you
 to confirm, then for your password. When the link or setup key comes from
 standard input, the confirmation is read from the terminal; without one, add
-`-y` to save it without asking. `totp code`
-prints only the code, and how long it stays valid on stderr. Counter-based
-(HOTP) codes, Steam codes (`steam://` links and links with `encoder=steam`)
-and Google Authenticator's `otpauth-migration` export links are not
-supported.
+`-y` to save it without asking, and a link from Google Authenticator
+(*Transfer accounts* → *Export accounts*) imports its whole batch with one
+confirmation, listing any code it cannot read and why. `totp code` prints
+only the code, and how long it stays valid on stderr; for a counter-based
+(HOTP) code, which has no time window, it prints the counter it used on
+stderr instead, and using it moves the code on to its next counter. Steam
+codes (`steam://BASE32` and links with `encoder=steam`) show Steam's five
+characters; they need the secret from another app's Steam Guard setup, as
+LocalPasskey cannot fetch it from Steam. `totp list` shows the type,
+including an HOTP code's next counter.
 
 In the window, the **Authenticator Codes** tab next to *Passkeys* lists your
 codes by website and account. Opening the tab asks for your password once;
@@ -356,8 +361,9 @@ you export: every live code when you export all passkeys (the default, or
 window's per-website export, and none when you export passkeys by ID. The
 trash is never exported. A
 backup that holds codes uses backup format version 2, which LocalPasskey 0.3.1
-and earlier refuse to open instead of silently dropping the codes; a backup
-without codes is unchanged. `import` restores codes from such a backup and
+and earlier refuse to open instead of silently dropping the codes; one that
+also holds an HOTP or Steam code is version 3, for the same reason, and a
+backup of plain codes and passkeys is unchanged. `import` restores codes from such a backup and
 skips one that is already on this computer (also in the trash), appears
 twice in the file, or does not fit (4096 codes, the trash included). CXF and Bitwarden files carry no authenticator codes in
 either direction.
