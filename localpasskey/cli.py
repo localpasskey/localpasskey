@@ -734,7 +734,8 @@ def main(argv=None):
     sub.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
     sub.set_defaults(func=cmd_import)
 
-    sub = commands.add_parser("totp", help="manage the authenticator codes (TOTP) stored on this computer")
+    sub = commands.add_parser("totp", help="manage the authenticator codes (TOTP, HOTP and Steam) "
+                              "stored on this computer")
     actions = sub.add_subparsers(dest="action", metavar="ACTION")
     actions.required = True
 

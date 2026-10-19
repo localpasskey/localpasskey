@@ -123,7 +123,7 @@ class Credential:
 
 @dataclass
 class TotpEntry:
-    """An authenticator code (TOTP) setup; the secret is sealed like a key."""
+    """An authenticator code setup; the secret is sealed like a key."""
 
     id: bytes  # 16 random bytes
     sealed_secret: bytes  # seal(uid, b"totp\0" + id, secret)

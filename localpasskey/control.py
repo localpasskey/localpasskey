@@ -6,9 +6,10 @@ manage their own passkeys; root may pass ``"user"`` to manage anyone's.
 Deleting moves passkeys to the trash; restoring, purging, the PIN, export and
 import ask the caller to authenticate through polkit first.
 
-Authenticator codes (TOTP) live in the same store: ``"totp"`` mirrors the
-passkey commands, and showing a code needs an unlock unless the user turned
-that setting off. An unlock is kept in memory for the calling process (pid
+Authenticator codes (TOTP, plus Steam and counter-based HOTP) live in the same
+store: ``"totp"`` mirrors the passkey commands, and showing a code needs an
+unlock unless the user turned that setting off. Showing every code never
+advances an HOTP counter; naming one does. An unlock is kept in memory for the calling process (pid
 plus its /proc start time, so a recycled pid does not inherit it) and expires
 after ``UNLOCK_IDLE`` seconds without a code request. Root is always unlocked.
 No reply but export carries a seed.

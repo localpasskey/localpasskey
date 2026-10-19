@@ -222,8 +222,10 @@ shows the trash instead, with the time each code was moved there.
 .B totp add
 Save an authenticator code. Paste the
 .B otpauth://totp/
-link or the setup key (Base32; spaces, dashes and lower case are fine) that
-the site shows next to its QR code. The command reads it from the terminal
+link (or the
+.B otpauth://hotp/
+or Steam link described below), or the setup key (Base32; spaces, dashes and
+lower case are fine) that the site shows next to its QR code. The command reads it from the terminal
 without echoing it, or as one line from standard input, never from the
 command line. It fills in the issuer and account from a link;
 .B \-\-issuer
@@ -264,7 +266,8 @@ is refused.
 .br
 An
 .B otpauth\-migration
-link (Google Authenticator's *Transfer accounts* → *Export accounts*) holds
+link (Google Authenticator's "Transfer accounts", then "Export
+accounts") holds
 several codes: the command shows the plan, asks once, and lists the codes it
 cannot read, such as MD5-based ones, with the reason. The website is what
 .B \-\-site
