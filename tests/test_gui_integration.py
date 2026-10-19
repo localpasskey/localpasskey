@@ -1086,6 +1086,35 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(details.code.text(), gui.grouped(totp.hotp(self.hotp_secret, 8)))
         self.assertEqual(self.counter(), 9)
 
+    def test_add_code_imports_every_code_in_a_migration_link(self):
+        from tests.test_totp import migration, migration_link, otp_parameters
+        link = migration_link(migration([
+            otp_parameters(name="Example:bob", issuer="example.com", type=2),
+            otp_parameters(name="Bank:me", issuer="Bank", type=1, counter=3),
+            otp_parameters(name="Old:me", algorithm=4, type=2),
+        ]))
+        self.app.clipboard().setText(link)
+
+        def fill(dialog):
+            next(b for b in dialog.findChildren(gui.QPushButton) if b.text() == "Paste").click()
+            self.assertIn("This link holds 3 authenticator codes.", dialog.note.text())
+            dialog.save_button.click()
+
+        self.open_codes()
+        checks = len(self.server.verifier.checks)
+        for done in ("Imported 2 authenticator codes", "Imported 0 authenticator codes; 2 could not be imported"):
+            self.app.clipboard().setText(link)
+            self.answer_dialog(fill)
+            self.window.add_code_action.trigger()
+            self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+            self.assertEqual(self.window.statusBar().currentMessage(), done)
+        self.assertEqual(len(self.server.verifier.checks), checks + 1, "one prompt; a re-import has nothing to ask")
+        entries = {e.issuer: e for e in self.server.store.totp_entries(self.uid, self.username)}
+        self.assertEqual((entries["example.com"].site, entries["example.com"].kind), ("example.com", "totp"))
+        self.assertEqual((entries["Bank"].kind, entries["Bank"].counter), ("hotp", 3))
+        self.assertNotIn("Old", entries)
+        self.assertEqual(self.app.clipboard().text(), "", "the link has done its job")
+
     def test_trash_lists_deleted_codes_and_purge_needs_the_site_typed(self):
         self.open_codes()
         self.select("github.com")

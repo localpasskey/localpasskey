@@ -214,6 +214,28 @@ class CodeTests(unittest.TestCase):
         self.assertEqual({k: dialog.entry()[k] for k in ("kind", "digits", "counter")},
                          {"kind": "hotp", "digits": 6, "counter": 12})
 
+    def test_a_migration_link_lists_its_codes_and_why_any_are_skipped(self):
+        from localpasskey import totp
+        from tests.test_totp import migration, migration_link, otp_parameters
+        dialog = gui.CodeDialog(self.parent)
+        self.assertEqual(dialog.key.maxLength(), totp.MAX_INPUT)
+        md5 = otp_parameters(name="Old:me\nnext", algorithm=4, type=2)
+        dialog.key.setText(migration_link(migration([
+            otp_parameters(name="GitHub:alice", issuer="GitHub", type=2),
+            otp_parameters(name="Bank:me", issuer="Bank", type=1, counter=3), md5])))
+        self.assertEqual(dialog.feedback.text(), "Link is valid")
+        self.assertTrue(dialog.save_button.isEnabled())
+        self.assertEqual(dialog.note.text(), "This link holds 3 authenticator codes.\n1 cannot be imported:\n"
+                                             "  Old:me next: MD5-based codes are not supported")
+        self.assertEqual([f.isEnabled() for f in (dialog.site, dialog.issuer, dialog.account)], [False] * 3)
+        dialog.key.setText(migration_link(migration([md5])))
+        self.assertEqual(dialog.feedback.text(), "None of the codes in this link can be imported")
+        self.assertFalse(dialog.save_button.isEnabled())
+        dialog.key.setText("JBSWY3DPEHPK3PXP")
+        self.assertIsNone(dialog.migration)
+        self.assertTrue(dialog.site.isEnabled())
+        self.assertFalse(dialog.note.isVisibleTo(dialog))
+
     def test_edit_dialog_has_no_setup_key(self):
         dialog = gui.CodeDialog(self.parent, {"site": "github.com", "issuer": "GitHub", "account": "octocat"})
         self.assertFalse(dialog.key.isVisibleTo(dialog))

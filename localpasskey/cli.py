@@ -543,12 +543,8 @@ def _totp_add(args, tty):
     return 0
 
 
-def _totp_migration(args, tty, text):
-    """A Google Authenticator export: the plan, one prompt, then one import request."""
-    try:
-        entries, skipped = totp.parse_migration(text)
-    except totp.OtpError as e:
-        raise CliError(str(e)) from None
+def migration_records(entries):
+    """The import request's code records for parse_migration's entries; the same link gives the same IDs."""
     records = []
     for parsed in entries:
         site = totp.normalize_site(totp.site_from_issuer(parsed["issuer"]))
@@ -560,6 +556,16 @@ def _totp_migration(args, tty, text):
             "digits": parsed["digits"], "period": parsed["period"],
             "kind": parsed["kind"], "counter": parsed["counter"],
         })
+    return records
+
+
+def _totp_migration(args, tty, text):
+    """A Google Authenticator export: the plan, one prompt, then one import request."""
+    try:
+        entries, skipped = totp.parse_migration(text)
+    except totp.OtpError as e:
+        raise CliError(str(e)) from None
+    records = migration_records(entries)
     # A skipped entry only has the label from the link; it is shown where the issuer goes.
     skipped_as_records = [{"code": {"id": "", "site": "", "issuer": label, "account": ""}, "reason": reason}
                           for label, reason in skipped]

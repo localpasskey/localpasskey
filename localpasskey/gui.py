@@ -42,7 +42,9 @@ from PyQt6.QtWidgets import (
 )
 
 from . import __version__, totp, transfer
-from .cli import join_counts, planned_records, plural, plural_codes, unwritable, write_private_file
+from .cli import (
+    join_counts, migration_records, planned_records, plural, plural_codes, unwritable, write_private_file,
+)
 from .client import ServiceUnavailable, request
 from .clientpin import MAX_PIN_RETRIES, pin_problem
 from .ctap2 import valid_rp_id
@@ -797,14 +799,15 @@ class ImportDialog(QDialog):
 
 
 class CodeDialog(QDialog):
-    """Add an authenticator code from a pasted setup key or otpauth:// link, or,
-    given ``entry``, change the website, issuer and account of one."""
+    """Add an authenticator code from a pasted setup key or otpauth:// link (or every code in a
+    Google Authenticator export link), or, given ``entry``, change the website, issuer and account of one."""
 
     def __init__(self, window, entry=None):
         super().__init__(window)
         self.setWindowTitle("Edit Authenticator Code" if entry else "Add Authenticator Code")
         self.adding = entry is None
         self.parsed = None
+        self.migration = None  # parse_migration's (entries, skipped) for an export link
         self.pasted = None  # what Paste took from the clipboard, to clear it after saving
         self.key = QLineEdit(echoMode=QLineEdit.EchoMode.Password, maxLength=totp.MAX_INPUT)
         show = QPushButton("Show", checkable=True)
@@ -821,7 +824,7 @@ class CodeDialog(QDialog):
         self.account = QLineEdit(maxLength=totp.MAX_LABEL)
         form = QFormLayout()
         if self.adding:
-            form.addRow("Setup key or otpauth:// link", key)
+            form.addRow("Setup key or link", key)
         form.addRow("Website", self.site)
         form.addRow("Issuer", self.issuer)
         form.addRow("Account", self.account)
@@ -857,16 +860,32 @@ class CodeDialog(QDialog):
         self.key.setText(self.pasted)
 
     def _parse(self, text):
-        self.parsed, self.problem = None, None
+        self.parsed, self.migration, self.problem = None, None, None
         if self.adding:
             try:
-                self.parsed = totp.parse(text) if text.strip() else None
+                if text.strip().lower().startswith("otpauth-migration://"):
+                    self.migration = totp.parse_migration(text)
+                else:
+                    self.parsed = totp.parse(text) if text.strip() else None
             except totp.OtpError as e:
                 self.problem = str(e)[:1].upper() + str(e)[1:]
             else:
-                if self.parsed is None:
+                if self.migration is not None and not self.migration[0]:
+                    self.problem = "None of the codes in this link can be imported"
+                elif self.parsed is None and self.migration is None:
                     self.problem = "Paste the setup key or link the website shows"
-        if self.parsed:
+        for field in (self.site, self.issuer, self.account):
+            field.setEnabled(self.migration is None)  # each code in the link keeps its own labels
+        if self.migration is not None:
+            entries, skipped = self.migration
+            lines = [f"This link holds {plural_codes(len(entries) + len(skipped))}."]
+            if skipped:  # labels come from the link: keep each on one line
+                lines.append(f"{len(skipped)} cannot be imported:")
+                lines += ["  " + "".join(ch if ch.isprintable() else " " for ch in f"{label}: {reason}")
+                          for label, reason in skipped]
+            self.note.setText("\n".join(lines))
+            self.note.setVisible(True)
+        elif self.parsed:
             suggestion = totp.site_from_issuer(self.parsed["issuer"])
             for field, value in ((self.issuer, self.parsed["issuer"]), (self.account, self.parsed["account"]),
                                  (self.site, suggestion)):
@@ -882,11 +901,12 @@ class CodeDialog(QDialog):
         self._sync()
 
     def _sync(self, *_):
-        site = totp.normalize_site(self.site.text())
+        site = totp.normalize_site(self.site.text()) if self.migration is None else ""
         problem = self.problem
         if problem is None and site and not valid_rp_id(site):
             problem = "The website must be a name such as github.com"
-        self.feedback.show_problem(problem, "Setup key is valid" if self.adding else "")
+        fine = "Link is valid" if self.migration else "Setup key is valid" if self.adding else ""
+        self.feedback.show_problem(problem, fine)
         self.save_button.setEnabled(problem is None)
 
     def labels(self):
@@ -1714,19 +1734,28 @@ class Window(QMainWindow):
             return
         dialog = CodeDialog(self)
         send = dialog.exec() == QDialog.DialogCode.Accepted and not self._still_busy()
-        entry, pasted = (dialog.entry(), dialog.pasted) if send else (None, None)
+        if send and dialog.migration:  # one import request; the dialog's plan was the one prompt
+            payload = {"command": "import", "credentials": [], "codes": migration_records(dialog.migration[0])}
+        elif send:
+            payload = {"command": "totp", "action": "add", "entry": dialog.entry()}
+        pasted = dialog.pasted
         dialog.key.clear()  # a closed dialog stays the window's child until deleted: keep no key in it
         dialog.deleteLater()
         if not send:
             return
         self._start("Waiting for you to authenticate…")
-        payload = {"command": "totp", "action": "add", "entry": entry}
 
         def finished(result, error):
             clipboard = QGuiApplication.clipboard()
             if error is None and pasted and clipboard.text() == pasted:
                 clipboard.clear()  # the setup key has done its job
-            self._finish(error, "Authenticator code added")
+            if result and "imported_codes" in result:
+                done = f"Imported {plural_codes(len(result['imported_codes']))}"
+                if result["skipped_codes"]:
+                    done += f"; {len(result['skipped_codes'])} could not be imported"
+            else:
+                done = "Authenticator code added"
+            self._finish(error, done)
 
         self.tasks.run(lambda: request(payload), finished)
 
