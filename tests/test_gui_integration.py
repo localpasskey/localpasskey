@@ -18,7 +18,7 @@ from localpasskey import cose, totp
 from localpasskey.client import ServiceError, ServiceUnavailable
 from localpasskey.clientpin import MAX_PIN_RETRIES, pin_hash
 from localpasskey.ctap2 import Verdict
-from localpasskey.store import Credential, PinState
+from localpasskey.store import Credential, PinState, TotpEntry
 from tests.gui_demo import start_backend
 from tests.test_control import FakePolkit
 
@@ -596,8 +596,22 @@ class CodesTabTests(unittest.TestCase):
         self.window._timer.stop()
         self.window.show()
         self.wait_for(lambda: not self.window._refreshing)
+        self.add_entry("steamcommunity.com", "Steam", "alice", "JBSWY3DPEHPK3PXP", "steam")
+        self.hotp_secret = totp.decode_secret("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        self.hotp_id = self.add_entry("bank.example", "Bank", "alice", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+                                      "hotp", counter=7)
 
     tearDown = WindowTests.tearDown
+
+    def add_entry(self, site, issuer, account, key, kind, counter=0):
+        entry_id = os.urandom(16)
+        self.server.store.totp_add(self.uid, self.username, TotpEntry(
+            id=entry_id, sealed_secret=self.server.store.seal(self.uid, b"totp\0" + entry_id,
+                                                             totp.decode_secret(key)),
+            site=site, issuer=issuer, account=account, algorithm="SHA1",
+            digits=totp.STEAM_DIGITS if kind == "steam" else 6, period=30, kind=kind, counter=counter,
+        ))
+        return entry_id
 
     def open_codes(self):
         self.window.tabs.setCurrentIndex(1)
@@ -622,12 +636,12 @@ class CodesTabTests(unittest.TestCase):
     @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
     def test_the_tab_unlocks_shows_the_codes_and_leaving_locks_them(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.assertEqual([m[1:] for m in self.server.verifier.checks],
                          [("org.localpasskey.totp", "Show the authenticator codes stored on this computer?")])
         self.assertEqual([self.window.model.headerData(i, Qt.Orientation.Horizontal) for i in range(3)],
                          list(gui.CODE_COLUMNS))
-        self.assertEqual(self.window.count_label.text(), "3 authenticator codes")
+        self.assertEqual(self.window.count_label.text(), "5 authenticator codes")
         self.assertEqual(self.code_cell("github.com"), gui.grouped(self.expected("github.com")))
         self.assertEqual(self.code_cell("Example Bank"), gui.grouped(self.expected("")))  # issuer stands in
         self.assertEqual(len(self.code_cell("Example Bank")), 9, "8 digits, grouped")
@@ -660,18 +674,18 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(self.window.message.text.text(), "Your password is needed to show them.")
         self.assertTrue(self.window.message.button.isVisible())
         self.assertEqual(self.window.statusBar().currentMessage(), "")
-        self.assertEqual(self.window.count_label.text(), "3 authenticator codes · locked")
+        self.assertEqual(self.window.count_label.text(), "5 authenticator codes · locked")
         self.server.verifier.verdict = Verdict.APPROVED
         QTest.mouseClick(self.window.message.button, Qt.MouseButton.LeftButton)
-        self.wait_for(lambda: len(self.window._values) == 3)
-        self.assertEqual(self.window.model.rowCount(), 3)
-        self.assertEqual(self.window.count_label.text(), "3 authenticator codes")
+        self.wait_for(lambda: len(self.window._values) == 4)
+        self.assertEqual(self.window.model.rowCount(), 5)
+        self.assertEqual(self.window.count_label.text(), "5 authenticator codes")
         self.assertFalse(self.window.message.button.isVisible())
 
     @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
     def test_the_service_locking_the_codes_shows_the_locked_state(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         with self.server._unlocks_lock:
             self.server._unlocks.clear()  # the idle relock, or a restarted service
         self.window._show_values({})
@@ -680,12 +694,12 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(self.window.model.rowCount(), 0)
         self.assertEqual(self.window.message.title.text(), "Authenticator codes are locked")
         self.assertEqual(self.window.statusBar().currentMessage(), "")
-        self.assertEqual(self.window.count_label.text(), "3 authenticator codes · locked")
+        self.assertEqual(self.window.count_label.text(), "5 authenticator codes · locked")
 
     @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
     def test_the_trash_view_relocks_when_the_service_drops_the_unlock(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.window.trash_action.setChecked(True)
         self.assertEqual(self.window._values, {}, "no old codes kept for the way back")
         self.wait_for(lambda: not self.window._refreshing)
@@ -698,18 +712,18 @@ class CodesTabTests(unittest.TestCase):
 
     def test_leaving_the_trash_fetches_the_codes_again(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.window._values = {k: ("000000", until, p) for k, (_, until, p) in self.window._values.items()}
         self.window.trash_action.setChecked(True)
         self.wait_for(lambda: not self.window._refreshing)
         self.window.trash_action.setChecked(False)
-        self.wait_for(lambda: self.window.model.rowCount() == 3 and len(self.window._values) == 3
+        self.wait_for(lambda: self.window.model.rowCount() == 5 and len(self.window._values) == 4
                       and not self.window._refreshing and not self.window._fetching)
         self.assertEqual(self.code_cell("github.com"), gui.grouped(self.expected("github.com")))
 
     def test_a_failed_refresh_forgets_the_codes(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         with patch.object(gui, "request", side_effect=ServiceUnavailable("gone")):
             self.window.refresh()
             self.wait_for(lambda: not self.window._refreshing)
@@ -717,7 +731,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_countdown_ticks_and_a_finished_code_is_fetched_again(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.select("github.com")
         code, _, period = self.window._values[self.window._selected_id]
         self.window._values[self.window._selected_id] = (code, time.monotonic() + 12.2, period)
@@ -732,7 +746,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_a_code_is_fetched_again_right_when_it_runs_out_not_at_the_next_tick(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.window._tick.stop()
         with patch.object(self.window, "_fetch_codes") as fetch:
             self.window._show_values({k: (c, time.monotonic() + 0.2, p) for k, (c, _, p) in self.window._values.items()})
@@ -742,7 +756,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_long_periods_still_fetch_every_minute_to_keep_the_unlock(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.window._show_values({k: (c, time.monotonic() + 290, 300) for k, (c, _, _) in self.window._values.items()})
         with patch.object(self.window, "_fetch_codes") as fetch:
             self.window._on_tick()
@@ -753,7 +767,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_a_failed_fetch_is_tried_again_a_minute_later_not_every_tick(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.window._tick.stop()
         self.window._values, self.window._fetched_at = {}, 0.0  # as if the first fetch failed
         self.window._on_codes(None, ServiceError("secret of authenticator code 0123 cannot be decrypted"))
@@ -766,7 +780,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_an_inactive_window_blanks_the_codes_and_fetches_none(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.select("github.com")
         with patch.object(self.window, "isActiveWindow", return_value=False):
             self.window.changeEvent(QEvent(QEvent.Type.ActivationChange))
@@ -778,11 +792,11 @@ class CodesTabTests(unittest.TestCase):
                 self.window._fetch_codes()
             asked.assert_not_called()
         self.window.changeEvent(QEvent(QEvent.Type.ActivationChange))
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
 
     def test_copy_code_is_marked_secret_and_cleared_only_if_still_there(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.select("github.com")
         QTest.keyClick(self.window.table, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
         clipboard = self.app.clipboard()
@@ -810,7 +824,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_the_clipboard_timer_clears_the_code_by_itself(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.select("github.com")
         self.assertEqual(self.window._clipboard_timer.timerType(), Qt.TimerType.PreciseTimer)
         clipboard = self.app.clipboard()
@@ -822,7 +836,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_the_clipboard_timer_fired_early_waits_for_the_time_left(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.select("github.com")
         clipboard = self.app.clipboard()
         with patch.object(gui, "COPY_CLEAR_MS", 50):
@@ -872,7 +886,7 @@ class CodesTabTests(unittest.TestCase):
         self.assertEqual(self.app.clipboard().text(), "")
         self.assertEqual(self.window.statusBar().currentMessage(), "Authenticator code added")
         self.window.activateWindow()  # the offscreen platform does not hand activation back by itself
-        self.wait_for(lambda: len(self.window._values) == 4)
+        self.wait_for(lambda: len(self.window._values) == 5)
 
     def test_add_code_keeps_a_clipboard_that_no_longer_holds_the_pasted_link(self):
         self.app.clipboard().setText("otpauth://totp/example.com:bob?secret=KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU")
@@ -917,7 +931,7 @@ class CodesTabTests(unittest.TestCase):
         self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
         self.assertEqual(self.window.findChildren(gui.CodeDialog), [], "the closed dialog still holds the key")
         self.window.activateWindow()
-        self.wait_for(lambda: len(self.window._values) == 4)
+        self.wait_for(lambda: len(self.window._values) == 5)
         self.select("leak.example")
         self.assertEqual(self.window.code_details.issuer.text(), "leak.example")
         self.assertEqual(leaks(self.window), [])
@@ -963,17 +977,17 @@ class CodesTabTests(unittest.TestCase):
 
     def test_several_code_rows_move_to_the_trash_in_one_request(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.select_rows("github.com", "google.com")
         self.assertEqual(self.window.message.title.text(), "2 authenticator codes selected")
         self.assertFalse(self.window.code_details.code.isVisible(), "no one code to show")
         seen = []
         self.answer_delete(True, seen)
         QTest.keyClick(self.window.table, Qt.Key.Key_Delete)
-        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 1)
+        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 3)
         self.assertEqual(seen[0].text(), "Move 2 authenticator codes to the trash?")
         self.assertEqual(self.window.statusBar().currentMessage(), "Moved 2 authenticator codes to the trash")
-        self.assertEqual(len(self.server.store.totp_entries(self.uid, self.username)), 1)
+        self.assertEqual(len(self.server.store.totp_entries(self.uid, self.username)), 3)
         self.assertEqual(sorted(e.issuer for e in self.server.store.totp_trash(self.uid, self.username)),
                          ["GitHub", "GitLab", "Google"])
 
@@ -996,7 +1010,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_double_click_copies_that_row_s_code(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         index = self.window.proxy.index(self.row_of("google.com"), 0)
         self.select("github.com")
         self.window._on_double_click(index)  # what the table's doubleClicked signal calls
@@ -1007,7 +1021,7 @@ class CodesTabTests(unittest.TestCase):
 
     def test_double_click_does_nothing_while_the_code_is_not_known(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         index = self.window.proxy.index(self.row_of("github.com"), 0)
         self.window._values = {}
         QApplication.clipboard().clear()
@@ -1018,17 +1032,66 @@ class CodesTabTests(unittest.TestCase):
 
     def test_double_click_on_the_big_code_copies_it_too(self):
         self.open_codes()
-        self.wait_for(lambda: len(self.window._values) == 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
         self.select("github.com")
         self.window.code_details.code.mouseDoubleClickEvent(None)
         self.assertEqual(self.app.clipboard().text(), self.expected("github.com"))
+
+    def counter(self):
+        return next(e.counter for e in self.server.store.totp_entries(self.uid, self.username)
+                    if e.id == self.hotp_id)
+
+    def test_a_steam_code_shows_its_5_characters_ungrouped(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 4)
+        expected = totp.steam_code(totp.decode_secret("JBSWY3DPEHPK3PXP"), int(time.time()) // 30)
+        self.assertEqual(self.code_cell("steamcommunity.com"), expected)
+        self.select("steamcommunity.com")
+        self.assertEqual(self.window.code_details.code.text(), expected)
+        self.assertEqual(self.window.code_details.kind.text(), "Steam · 5 characters · every 30 s")
+        self.assertRegex(self.window.code_details.countdown.text(), r"^Changes in \d+ s$")
+        self.assertFalse(self.window.code_details.next_button.isVisible())
+        self.assertFalse(self.window.next_code_action.isEnabled())
+
+    def test_an_hotp_code_moves_on_only_on_next_code(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 4)
+        self.assertEqual(self.code_cell("bank.example"), gui.HIDDEN_CODE, "showing every code uses no counter")
+        self.assertEqual(self.counter(), 7)
+        self.select("bank.example")
+        details = self.window.code_details
+        self.assertEqual(details.countdown.text(), "Counter 7")
+        self.assertTrue(details.next_button.isVisible())
+        self.assertFalse(details.copy_button.isEnabled())
+        self.assertTrue(self.window.next_code_action.isEnabled())
+        self.assertFalse(self.window.copy_code_action.isEnabled())
+        self.window.next_code_action.trigger()
+        self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+        expected = totp.hotp(self.hotp_secret, 7)
+        self.assertEqual(self.counter(), 8, "written before the code was shown")
+        self.assertEqual(details.code.text(), gui.grouped(expected))
+        self.assertEqual(details.countdown.text(), "Counter 7", "the counter of the code shown")
+        self.assertEqual(self.code_cell("bank.example"), gui.grouped(expected))
+        self.assertEqual(details.kind.text(), "SHA1 · 6 digits · a new code each time you ask")
+        self.window._fetch_codes()  # the background fetch keeps the shown code and uses no counter
+        self.wait_for(lambda: not self.window._fetching)
+        self.assertEqual(self.window._values[self.hotp_id.hex()][0], expected)
+        self.window._on_tick()
+        self.assertEqual(details.countdown.text(), "Counter 7")
+        self.window._on_double_click(self.window.proxy.index(self.row_of("bank.example"), 0))
+        self.assertEqual(self.app.clipboard().text(), expected)
+        self.assertEqual(self.counter(), 8, "copying copies the code shown, it makes no new one")
+        details.next_button.click()
+        self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+        self.assertEqual(details.code.text(), gui.grouped(totp.hotp(self.hotp_secret, 8)))
+        self.assertEqual(self.counter(), 9)
 
     def test_trash_lists_deleted_codes_and_purge_needs_the_site_typed(self):
         self.open_codes()
         self.select("github.com")
         self.answer_delete(True)
         self.window.delete_code_action.trigger()
-        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 2)
+        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 4)
         self.window.trash_action.toggle()
         self.wait_for(lambda: not self.window._refreshing and self.window.model.rowCount() == 2)
         self.assertEqual(self.window.model.headerData(2, Qt.Orientation.Horizontal), "Deleted")
@@ -1052,7 +1115,7 @@ class CodesTabTests(unittest.TestCase):
         self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 0)
         self.assertEqual(self.window.message.title.text(), "The trash is empty")
         self.assertEqual(self.server.store.totp_trash(self.uid, self.username), [])
-        self.assertEqual(len(self.server.store.totp_entries(self.uid, self.username)), 3)
+        self.assertEqual(len(self.server.store.totp_entries(self.uid, self.username)), 5)
 
     @unittest.skipIf(os.getuid() == 0, "root is never asked for a password")
     def test_settings_turning_the_password_off_asks_and_a_refusal_puts_it_back(self):
@@ -1099,8 +1162,8 @@ class CodesTabTests(unittest.TestCase):
         gui.SettingsDialog(self.window).exec()
         self.wait_for(lambda: self.window._unlocked)
         self.window.activateWindow()  # the offscreen platform does not hand activation back by itself
-        self.wait_for(lambda: len(self.window._values) == 3)
-        self.assertEqual(self.window.model.rowCount(), 3)
+        self.wait_for(lambda: len(self.window._values) == 4)
+        self.assertEqual(self.window.model.rowCount(), 5)
         self.assertEqual(len(self.server.verifier.checks), asked[0], "the unlock asked nothing")
 
 if __name__ == "__main__":

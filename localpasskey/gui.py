@@ -9,10 +9,12 @@ or removed here too. Passkeys can be exported to an encrypted backup and
 imported from one (or from CXF and Bitwarden files); the files are read,
 written and encrypted here, never by the service.
 
-The Authenticator Codes tab shows the time-based codes (TOTP) the service keeps
-for the user. Opening it asks the service for the user's password once; the
-window then asks for the current codes while it is active, and only the codes:
-the setup keys never leave the service except in an export.
+The Authenticator Codes tab shows the codes the service keeps for the user:
+time-based (TOTP), Steam, and counter-based (HOTP) ones. Opening it asks the
+service for the user's password once; the window then asks for the current
+codes while it is active, and only the codes: the setup keys never leave the
+service except in an export. An HOTP code is only made on Next Code, since
+each one uses up its counter.
 """
 
 from __future__ import annotations
@@ -140,12 +142,19 @@ def code_title(entry: dict) -> str:
 
 
 def grouped(code: str) -> str:
-    """123456 -> "123 456", 12345678 -> "1234 5678": easier to read and type."""
+    """123456 -> "123 456", 12345678 -> "1234 5678": easier to read and type.
+    A Steam code's 5 characters stay as they are."""
+    if len(code) % 2:
+        return code
     half = len(code) // 2
     return f"{code[:half]} {code[half:]}"
 
 
 def code_type(entry: dict) -> str:
+    if entry.get("kind") == "steam":
+        return f"Steam · 5 characters · every {entry['period']} s"
+    if entry.get("kind") == "hotp":
+        return f"{entry['algorithm']} · {entry['digits']} digits · a new code each time you ask"
     return f"{entry['algorithm']} · {entry['digits']} digits · every {entry['period']} s"
 
 
@@ -418,7 +427,7 @@ class CodeLabel(QLabel):
 
 
 class CodeDetails(QFrame):
-    """One authenticator code: its current value, a countdown and its labels."""
+    """One authenticator code: its current value, a countdown (an HOTP code: its counter) and its labels."""
 
     _heading, _row, _show_row = Details._heading, Details._row, Details._show_row
 
@@ -438,10 +447,13 @@ class CodeDetails(QFrame):
         self.countdown.setStyleSheet(f"color: {PALETTE.COLOR_TEXT_3};")
         self.copy_button = QPushButton("Copy Code")
         self.copy_button.clicked.connect(lambda: window.copy_code())
+        self.next_button = QPushButton("Next Code")
+        self.next_button.clicked.connect(lambda: window.next_code(self.entry))
         value = QHBoxLayout()
         value.setSpacing(14)
         value.addWidget(self.code)
         value.addWidget(self.countdown, 1)
+        value.addWidget(self.next_button)
         value.addWidget(self.copy_button)
 
         self.form = QFormLayout()
@@ -498,23 +510,27 @@ class CodeDetails(QFrame):
         self.ident.setText(entry["id"][:12])
         for widget in (self.code, self.countdown, self.copy_button, self.edit_button, self.delete_button):
             widget.setVisible(not trashed)
+        self.next_button.setVisible(not trashed and entry.get("kind") == "hotp")
         self.restore_button.setVisible(trashed)
         self.purge_button.setVisible(trashed)
         self.show_value(value)
 
     def show_value(self, value):
-        """``value`` is (code, monotonic time it runs out, period), or None while unknown."""
-        if value is None:
-            self.code.setText(HIDDEN_CODE)
+        """``value`` is (code, monotonic time it runs out, period), or None while unknown;
+        an HOTP code does not run out: (code, None, its counter)."""
+        self.code.setText(grouped(value[0]) if value else HIDDEN_CODE)
+        if self.entry.get("kind") == "hotp":  # before Next Code: the counter the next code uses
+            self.countdown.setText(f"Counter {value[2] if value else self.entry['counter']}")
+        elif value is None:
             self.countdown.setText("")
         else:
-            self.code.setText(grouped(value[0]))
             left = max(0, math.ceil(value[1] - time.monotonic()))
             self.countdown.setText(f"Changes in {left} s")
         self.copy_button.setEnabled(value is not None)
 
     def set_busy(self, busy, moving=True):
-        for button in (self.edit_button, self.delete_button, self.restore_button, self.purge_button):
+        for button in (self.edit_button, self.delete_button, self.restore_button, self.purge_button,
+                       self.next_button):
             button.setEnabled(not busy)
         self.delete_button.setText("Moving…" if busy and moving else "Move to Trash…")
 
@@ -857,7 +873,8 @@ class CodeDialog(QDialog):
                 if field not in self.edited:  # what the user typed wins over any link
                     field.setText(value)
             usual = (totp.DEFAULT_ALGORITHM, totp.DEFAULT_DIGITS, totp.DEFAULT_PERIOD)
-            unusual = (self.parsed["algorithm"], self.parsed["digits"], self.parsed["period"]) != usual
+            unusual = self.parsed["kind"] != "steam" and (
+                self.parsed["algorithm"], self.parsed["digits"], self.parsed["period"]) != usual
             self.note.setText(f"This code is unusual: {code_type(self.parsed)}." if unusual else "")
             self.note.setVisible(unusual)
         else:
@@ -880,7 +897,7 @@ class CodeDialog(QDialog):
         """The ``add`` request's entry; the secret goes to the service and nowhere else."""
         return {"secret": totp.encode_secret(self.parsed["secret"]), **self.labels(),
                 "algorithm": self.parsed["algorithm"], "digits": self.parsed["digits"],
-                "period": self.parsed["period"]}
+                "period": self.parsed["period"], "kind": self.parsed["kind"], "counter": self.parsed["counter"]}
 
 
 class SettingsDialog(QDialog):
@@ -949,7 +966,7 @@ class Window(QMainWindow):
         self._unlocking = False
         self._fetching = False
         self._fetch_again = False
-        self._values = {}  # code ID -> (code, monotonic time it runs out, period)
+        self._values = {}  # code ID -> (code, monotonic time it runs out, period); HOTP: (code, None, counter)
         self._fetched_at = 0.0  # monotonic time of the last successful code fetch
         self._code_count = None  # live codes, for the export checkbox
         self._copied = None  # the code Copy Code put on the clipboard
@@ -1087,6 +1104,7 @@ class Window(QMainWindow):
         self.code_menu.menuAction().setVisible(False)
         self.add_code_action = action(self.code_menu, "&Add Code…", self.add_code, QKeySequence.StandardKey.New)
         self.copy_code_action = action(self.code_menu, "&Copy Code", self.copy_code, QKeySequence.StandardKey.Copy)
+        self.next_code_action = action(self.code_menu, "&Next Code", lambda: self.next_code(self.code_details.entry))
         self.edit_code_action = action(self.code_menu, "&Edit…", lambda: self.edit_code(self.code_details.entry))
         self.code_menu.addSeparator()
         self.delete_code_action = action(self.code_menu, "Move to &Trash…", lambda: self.trash_chosen(delete=True),
@@ -1208,12 +1226,14 @@ class Window(QMainWindow):
                     self._error(error)
             return
         now = self._fetched_at = time.monotonic()
-        self._show_values({c["id"]: (c["code"], now + c["remaining"], c["period"]) for c in codes})
+        kept = {i: value for i, value in self._values.items() if value[1] is None}  # "all" has no HOTP codes
+        self._show_values({**kept, **{c["id"]: (c["code"], now + c["remaining"], c["period"]) for c in codes}})
 
     def _show_values(self, values):
         self._values = values
-        if values:  # a few ms late, so the tick sees the code as run out
-            left = min(until for _, until, _ in values.values()) - time.monotonic()
+        ends = [until for _, until, _ in values.values() if until is not None]
+        if ends:  # a few ms late, so the tick sees the code as run out
+            left = min(ends) - time.monotonic()
             self._rollover.start(max(0, math.ceil(left * 1000)) + 5)
         else:
             self._rollover.stop()
@@ -1230,7 +1250,8 @@ class Window(QMainWindow):
         if self.side.currentWidget() is self.code_details:
             self.code_details.show_value(self._values.get(self.code_details.entry["id"]))
         now = time.monotonic()
-        if now - self._fetched_at >= KEEP_UNLOCKED_S or any(until <= now for _, until, _ in self._values.values()):
+        if now - self._fetched_at >= KEEP_UNLOCKED_S or any(
+                until is not None and until <= now for _, until, _ in self._values.values()):
             self._fetch_codes()
 
     def set_trash(self, on):
@@ -1301,7 +1322,7 @@ class Window(QMainWindow):
         if creds != self._creds:
             self._creds = creds
             self._rebuild()
-            if any(entry["id"] not in self._values for entry in creds if codes):
+            if any(entry["id"] not in self._values for entry in creds if codes and entry.get("kind") != "hotp"):
                 self._fetch_codes()  # a new code has no value yet
         self._show_count()
 
@@ -1417,6 +1438,8 @@ class Window(QMainWindow):
         some = codes and (cred is not None or many) and not self._busy  # Move to Trash and Restore take several
         self.add_code_action.setEnabled(codes and not self._busy)
         self.copy_code_action.setEnabled(live and cred["id"] in self._values)
+        self.next_code_action.setVisible(not self._trash)
+        self.next_code_action.setEnabled(live and cred.get("kind") == "hotp" and not self._busy)
         self.edit_code_action.setVisible(not self._trash)
         self.edit_code_action.setEnabled(live and not self._busy)
         self.delete_code_action.setVisible(not self._trash)
@@ -1704,6 +1727,20 @@ class Window(QMainWindow):
             if error is None and pasted and clipboard.text() == pasted:
                 clipboard.clear()  # the setup key has done its job
             self._finish(error, "Authenticator code added")
+
+        self.tasks.run(lambda: request(payload), finished)
+
+    def next_code(self, entry):
+        """Show an HOTP code's next code: only on request, since each one uses up its counter."""
+        if not self._start("Getting the next code…"):
+            return
+        payload = {"command": "totp", "action": "next", "ids": [entry["id"]]}
+
+        def finished(result, error):
+            if error is None and self._unlocked:  # before _finish: its refresh rebuilds the rows from _values
+                code = result["code"]
+                self._show_values({**self._values, code["id"]: (code["code"], None, code["counter"])})
+            self._finish(error)
 
         self.tasks.run(lambda: request(payload), finished)
 

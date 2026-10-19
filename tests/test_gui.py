@@ -165,6 +165,13 @@ class CodeTests(unittest.TestCase):
     def test_codes_are_grouped_and_hidden_until_known(self):
         self.assertEqual(gui.grouped("123456"), "123 456")
         self.assertEqual(gui.grouped("12345678"), "1234 5678")
+        self.assertEqual(gui.grouped("FR8RV"), "FR8RV", "a Steam code's odd length stays ungrouped")
+        self.assertEqual(gui.code_type({"kind": "steam", "algorithm": "SHA1", "digits": 5, "period": 30}),
+                         "Steam · 5 characters · every 30 s")
+        self.assertEqual(gui.code_type({"kind": "hotp", "algorithm": "SHA1", "digits": 6, "period": 30}),
+                         "SHA1 · 6 digits · a new code each time you ask")
+        self.assertEqual(gui.code_type({"algorithm": "SHA1", "digits": 6, "period": 30}),
+                         "SHA1 · 6 digits · every 30 s")
         entry = {"id": "ab", "site": "", "issuer": "Bank", "account": "Alice", "deleted": 5.0}
         self.assertEqual([c.text() for c in gui.code_row(entry)], ["Bank", "Alice", gui.HIDDEN_CODE])
         self.assertEqual(gui.code_row(entry, code="070818")[2].text(), "070 818")
@@ -187,13 +194,25 @@ class CodeTests(unittest.TestCase):
                 self.assertEqual(dialog.save_button.isEnabled(), shown == "Setup key is valid")
         self.assertFalse(dialog.note.isVisibleTo(dialog))
         self.assertEqual(dialog.entry(), {"secret": "JBSWY3DPEHPK3PXP", "site": "", "issuer": "", "account": "",
-                                          "algorithm": "SHA1", "digits": 6, "period": 30})
+                                          "algorithm": "SHA1", "digits": 6, "period": 30,
+                                          "kind": "totp", "counter": 0})
         dialog.key.setText("otpauth://totp/Big%20Corp:al?secret=JBSWY3DPEHPK3PXP&algorithm=SHA256&period=60")
         self.assertEqual((dialog.site.text(), dialog.issuer.text(), dialog.account.text()), ("", "Big Corp", "al"))
         self.assertTrue(dialog.note.isVisibleTo(dialog))
         self.assertIn("SHA256 · 6 digits · every 60 s", dialog.note.text())
         dialog.site.setText("a b")
         self.assertFalse(dialog.save_button.isEnabled())
+
+    def test_steam_and_hotp_links_send_their_kind_and_counter(self):
+        dialog = gui.CodeDialog(self.parent)
+        dialog.key.setText("otpauth://steam/Steam:alice?secret=JBSWY3DPEHPK3PXP")
+        self.assertEqual(dialog.feedback.text(), "Setup key is valid")
+        self.assertFalse(dialog.note.isVisibleTo(dialog), "Steam's 5 characters are not unusual for Steam")
+        self.assertEqual({k: dialog.entry()[k] for k in ("kind", "digits", "counter")},
+                         {"kind": "steam", "digits": 5, "counter": 0})
+        dialog.key.setText("otpauth://hotp/Bank:me?secret=JBSWY3DPEHPK3PXP&counter=12")
+        self.assertEqual({k: dialog.entry()[k] for k in ("kind", "digits", "counter")},
+                         {"kind": "hotp", "digits": 6, "counter": 12})
 
     def test_edit_dialog_has_no_setup_key(self):
         dialog = gui.CodeDialog(self.parent, {"site": "github.com", "issuer": "GitHub", "account": "octocat"})
