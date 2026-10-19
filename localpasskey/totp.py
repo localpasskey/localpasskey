@@ -25,13 +25,15 @@ DIGITS = (6, 8)
 MIN_PERIOD, MAX_PERIOD = 1, 300
 DEFAULT_ALGORITHM, DEFAULT_DIGITS, DEFAULT_PERIOD = "SHA1", 6, 30
 MIN_SECRET_BYTES, MAX_SECRET_BYTES = 10, 128  # 80 bits: below RFC 4226's 128, but common in the wild
-MAX_INPUT = 2048  # characters of pasted text
+MAX_INPUT = 8192  # characters of pasted text: a migration link holds a batch of codes
+MAX_COUNTER = 2**53 - 1  # the largest counter a JavaScript client handles exactly
 MAX_LABEL = MAX_LABEL_LENGTH  # site, issuer and account
 STEAM_ALPHABET, STEAM_DIGITS = "23456789BCDFGHJKMNPQRTVWXY", 5
 
 _HASHES = {"SHA1": hashlib.sha1, "SHA256": hashlib.sha256, "SHA512": hashlib.sha512}
 _BASE32 = re.compile(r"[A-Z2-7]*")
 _NUMBER = re.compile(r"[0-9]{1,4}")
+_COUNTER = re.compile(r"[0-9]{1,16}")
 # A dotted host name of ASCII letters, digits and hyphens: what "Open Website" can open.
 _HOST = re.compile(r"(?=.{1,253}\Z)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?",
                    re.ASCII)
@@ -78,11 +80,24 @@ def _number(value: str, name: str) -> int:
     return int(value)
 
 
+def _counter(value: str, name: str = "counter") -> int:
+    # A JavaScript client shows this link too: keep the counter a safe integer.
+    if not _COUNTER.fullmatch(value) or int(value) > MAX_COUNTER:
+        raise OtpError(f"the {name} parameter must be 0 to {MAX_COUNTER}")
+    return int(value)
+
+
+def _steam(result: dict) -> dict:
+    result.update(kind="steam", algorithm="SHA1", digits=STEAM_DIGITS, period=DEFAULT_PERIOD, counter=0)
+    return result
+
+
 def parse(text: str) -> dict:
-    """Parse a pasted ``otpauth://totp/`` link or bare setup key.
+    """Parse a pasted ``otpauth://`` link or bare setup key.
 
     Returns a dict with the keys secret (bytes), issuer, account, algorithm,
-    digits and period. Raises OtpError with a message for the user."""
+    digits, period, kind ("totp", "hotp" or "steam") and counter (only an
+    hotp code uses it). Raises OtpError with a message for the user."""
     if len(text) > MAX_INPUT:
         raise OtpError("the text is too long for a setup key or link")
     text = text.strip()
@@ -93,6 +108,8 @@ def parse(text: str) -> dict:
         "algorithm": DEFAULT_ALGORITHM,
         "digits": DEFAULT_DIGITS,
         "period": DEFAULT_PERIOD,
+        "kind": "totp",
+        "counter": 0,
     }
     if "://" not in text and not text.lower().startswith("otpauth:"):
         result["secret"] = decode_secret(text)
@@ -101,10 +118,11 @@ def parse(text: str) -> dict:
         url = urlsplit(text)
     except ValueError:
         raise OtpError("not an otpauth://totp/ link or a setup key") from None
-    kind = url.netloc.lower()
-    if url.scheme.lower() == "otpauth" and kind == "hotp":
-        raise OtpError("counter-based (HOTP) codes are not supported")
-    if url.scheme.lower() != "otpauth" or kind != "totp":
+    scheme, kind = url.scheme.lower(), url.netloc.lower()
+    if scheme == "steam":
+        result["secret"] = decode_secret(url.netloc + url.path)  # steam://BASE32
+        return _steam(result)
+    if scheme != "otpauth" or kind not in ("totp", "hotp", "steam"):
         raise OtpError("not an otpauth://totp/ link or a setup key")
 
     label = unquote(url.path[1:])
@@ -113,16 +131,25 @@ def parse(text: str) -> dict:
     for key, value in parse_qsl(url.query, keep_blank_values=True):
         params.setdefault(key.lower(), value)
 
+    if kind == "steam":
+        # otpauth://steam/BASE32 has the key in the path and no label.
+        result["secret"] = decode_secret(params["secret"] if "secret" in params else url.path[1:])
+        result["issuer"] = _clean_label(params.get("issuer", ""))
+        return _steam(result)
+
     encoder = params.get("encoder", "").strip().lower()
-    if encoder == "steam":
-        raise OtpError("Steam codes are not supported")
-    if encoder:
+    if encoder and encoder != "steam":
         raise OtpError("the encoder parameter is not supported")  # its codes are not RFC 6238 digits
     if "secret" not in params:
         raise OtpError("the link has no secret parameter")
     result["secret"] = decode_secret(params["secret"])
     if params.get("issuer", "").strip():
         issuer = params["issuer"]
+    if kind == "hotp":
+        if "counter" not in params:
+            raise OtpError("the link has no counter parameter")
+        result["kind"] = "hotp"
+        result["counter"] = _counter(params["counter"])
     if "algorithm" in params:
         algorithm = params["algorithm"].upper().replace("-", "")
         if algorithm not in ALGORITHMS:
@@ -140,6 +167,8 @@ def parse(text: str) -> dict:
         result["period"] = period
     result["issuer"] = _clean_label(issuer)
     result["account"] = _clean_label(account)
+    if encoder == "steam":
+        return _steam(result)  # its own alphabet: no algorithm, digits or period to read
     return result
 
 

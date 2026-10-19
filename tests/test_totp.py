@@ -114,6 +114,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(totp.parse("  jbsw y3dp ehpk 3pxp\n"), {
             "secret": SECRET, "issuer": "", "account": "",
             "algorithm": "SHA1", "digits": 6, "period": 30,
+            "kind": "totp", "counter": 0,
         })
 
     def test_full_link(self):
@@ -161,11 +162,36 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(got["issuer"], "Bad Co")
         self.assertEqual(len(got["account"]), totp.MAX_LABEL)
 
+    def test_hotp_link(self):
+        got = totp.parse(f"otpauth://hotp/ACME:john?secret={KEY}&counter=42&digits=8&issuer=ACME")
+        self.assertEqual((got["kind"], got["counter"]), ("hotp", 42))
+        self.assertEqual((got["issuer"], got["account"]), ("ACME", "john"))
+        self.assertEqual((got["algorithm"], got["digits"], got["period"]), ("SHA1", 8, 30))
+        self.assertEqual(totp.parse(f"otpauth://hotp/x?secret={KEY}&counter=0")["counter"], 0)
+        biggest = 2**53 - 1
+        self.assertEqual(totp.parse(f"otpauth://hotp/x?secret={KEY}&counter={biggest}")["counter"], biggest)
+
+    def test_steam_links(self):
+        want = dict(issuer="", account="", algorithm="SHA1", digits=5, period=30,
+                    kind="steam", counter=0)
+        for text in (f"steam://{KEY}", f"otpauth://steam/{KEY}", f"otpauth://steam/x?secret={KEY}"):
+            self.assertEqual(totp.parse(text), dict(want, secret=SECRET), text)
+        got = totp.parse(f"otpauth://totp/Steam:me?secret={KEY}&issuer=Steam&encoder=STEAM")
+        self.assertEqual((got["kind"], got["digits"], got["algorithm"]), ("steam", 5, "SHA1"))
+        self.assertEqual((got["issuer"], got["account"]), ("Steam", "me"))
+        got = totp.parse(f"otpauth://hotp/x?secret={KEY}&counter=1&encoder=steam")
+        self.assertEqual((got["kind"], got["counter"]), ("steam", 0))
+
     def test_refused(self):
         cases = {
-            f"otpauth://hotp/x?secret={KEY}&counter=0": "HOTP",
             "otpauth-migration://offline?data=CjMKCkhlbGxv": "not an otpauth://totp/ link",
-            f"steam://{KEY}": "not an otpauth://totp/ link",
+            "steam://JBSWY3DP": "too short",
+            "otpauth://steam/": "too short",
+            f"otpauth://hotp/x?secret={KEY}": "counter",
+            f"otpauth://hotp/x?secret={KEY}&counter=": "counter",
+            f"otpauth://hotp/x?secret={KEY}&counter=-1": "counter",
+            f"otpauth://hotp/x?secret={KEY}&counter=2**53": "counter",
+            f"otpauth://hotp/x?secret={KEY}&counter=0&digits=5": "digits",
             f"https://example.com/?secret={KEY}": "not an otpauth://totp/ link",
             f"otpauth://xotp/x?secret={KEY}": "not an otpauth://totp/ link",
             "otpauth://totp/x": "secret",
@@ -177,8 +203,6 @@ class ParseTests(unittest.TestCase):
             f"otpauth://totp/x?secret={KEY}&digits=7": "digits",
             f"otpauth://totp/x?secret={KEY}&digits=": "digits",
             f"otpauth://totp/x?secret={KEY}&algorithm=MD5": "algorithm",
-            f"otpauth://totp/Steam:me?secret={KEY}&issuer=Steam&encoder=steam": "Steam codes are not supported",
-            f"otpauth://totp/x?secret={KEY}&Encoder=STEAM": "Steam codes are not supported",
             f"otpauth://totp/x?secret={KEY}&encoder=yandex": "the encoder parameter is not supported",
         }
         for text, message in cases.items():
@@ -189,6 +213,8 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(totp.parse(f"otpauth://totp/x?secret={KEY}&encoder=")["secret"], SECRET)
 
     def test_oversize_input(self):
+        self.assertEqual((totp.MAX_INPUT, totp.parse(KEY + " " * (totp.MAX_INPUT - len(KEY)))["secret"]),
+                         (8192, SECRET))
         with self.assertRaisesRegex(OtpError, "too long"):
             totp.parse(KEY + " " * totp.MAX_INPUT)
 

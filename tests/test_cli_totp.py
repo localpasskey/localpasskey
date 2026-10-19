@@ -121,7 +121,7 @@ class CliTotpTests(unittest.TestCase):
         code, out, _ = self.run_cli("totp", "add", "--site", "github.com", tty=True, passphrases=[LINK], typed=["n"])
         self.assertEqual(code, 1)
         self.assertIn("Nothing added.", out)
-        for text, message in (("otpauth://hotp/x?secret=" + KEY, "HOTP"), ("ABC", "not a valid setup key"), ("", "")):
+        for text, message in (("otpauth://hotp/x?secret=" + KEY, "counter parameter"), ("ABC", "not a valid setup key"), ("", "")):
             with self.subTest(text=text):
                 code, _, err = self.run_cli("totp", "add", "-y", stdin=text + "\n")
                 self.assertEqual(code, 1)

@@ -177,7 +177,7 @@ class CodeTests(unittest.TestCase):
         cases = [
             ("", "Paste the setup key or link the website shows"),
             ("JBSW", "The setup key is too short"),
-            ("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP", "Counter-based (HOTP) codes are not supported"),
+            ("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP", "The link has no counter parameter"),
             ("jbsw y3dp ehpk 3pxp", "Setup key is valid"),
         ]
         for text, shown in cases:
