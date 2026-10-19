@@ -9,8 +9,9 @@ A LocalPasskey backup is a JSON envelope; the records are encrypted with
 AES-256-GCM under a key derived from the passphrase with scrypt, and the
 envelope header is the associated data, so its parameters cannot be swapped.
 A backup that also holds authenticator codes ("totp records", setup keys as
-Base32) is version 2, so a LocalPasskey that only knows version 1 refuses it
-instead of silently dropping the codes. CXF and Bitwarden files carry passkeys
+Base32) is version 2, and one that also holds an HOTP or Steam code is version
+3, so a LocalPasskey that only knows an older version refuses the file instead
+of silently dropping the codes or the counter. CXF and Bitwarden files carry passkeys
 only.
 """
 
@@ -35,6 +36,7 @@ from .store import b64decode, b64decode_strict, b64encode
 BACKUP_FORMAT = "localpasskey-backup"
 BACKUP_VERSION = 1
 CODES_BACKUP_VERSION = 2  # the payload also holds authenticator codes
+CODE_KIND_BACKUP_VERSION = 3  # ... and one is not a plain TOTP code
 BACKUP_SUFFIX = ".lpkbackup"
 MIN_PASSPHRASE_LENGTH = 8
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**17, 8, 1  # about 0.3 s and 128 MiB
@@ -215,7 +217,10 @@ def export_backup(records: List[dict], passphrase: str, codes: Optional[List[dic
         raise TransferError(f"Unsuitable passphrase: {problem}")
     header = {
         "format": BACKUP_FORMAT,
-        "version": CODES_BACKUP_VERSION if codes else BACKUP_VERSION,
+        # A record that is not a dict is skipped on reading anyway; it stays at 2.
+        "version": (CODE_KIND_BACKUP_VERSION if any(
+                        isinstance(c, dict) and c.get("kind", "totp") != "totp" for c in codes)
+                    else CODES_BACKUP_VERSION) if codes else BACKUP_VERSION,
         "kdf": {"name": "scrypt", "n": SCRYPT_N, "r": SCRYPT_R, "p": SCRYPT_P,
                 "salt": b64encode(os.urandom(_SALT_SIZE))},
         "cipher": "AES-256-GCM",
@@ -236,7 +241,8 @@ def _int(value, low, high) -> bool:
 
 def _check_header(doc: dict) -> dict:
     version = doc.get("version")
-    if isinstance(version, bool) or version not in (BACKUP_VERSION, CODES_BACKUP_VERSION):
+    if isinstance(version, bool) or version not in (
+            BACKUP_VERSION, CODES_BACKUP_VERSION, CODE_KIND_BACKUP_VERSION):
         raise TransferError("This backup was made by a newer LocalPasskey; update LocalPasskey to read it")
     kdf = doc.get("kdf")
     if doc.get("cipher") != "AES-256-GCM" or not isinstance(kdf, dict) or kdf.get("name") != "scrypt":
@@ -273,8 +279,8 @@ def _load_backup(doc: dict, passphrase_callback: Callable[[], str]) -> Records:
     try:
         payload = json.loads(plaintext)
         creds = payload["credentials"]
-        # The version is authenticated, so a version 2 payload must have its codes.
-        codes = payload["codes"] if header["version"] == CODES_BACKUP_VERSION else []
+        # The version is authenticated, so a payload from 2 or 3 must have its codes.
+        codes = payload["codes"] if header["version"] >= CODES_BACKUP_VERSION else []
         if not isinstance(creds, list) or not isinstance(codes, list):
             raise TypeError
     except (ValueError, KeyError, TypeError, RecursionError):
@@ -317,6 +323,14 @@ def _code_from_backup(data) -> dict:
     if not isinstance(secret, str):
         raise _Skip("the setup key is missing")
     secret = totp.decode_secret(secret)
+    kind = data.get("kind", "totp")
+    if not isinstance(kind, str) or kind not in ("totp", "hotp", "steam"):
+        raise _Skip("the kind must be totp, hotp or steam")
+    counter = data.get("counter", 0)
+    if not _int(counter, 0, totp.MAX_COUNTER):
+        raise _Skip(f"the counter must be 0 to {totp.MAX_COUNTER}")
+    if kind != "hotp" and counter:
+        raise _Skip(f"a {kind} code has no counter")
     site = data.get("site", "")
     if site != "" and not valid_rp_id(site):
         raise _Skip("invalid site")
@@ -324,8 +338,9 @@ def _code_from_backup(data) -> dict:
     if algorithm not in totp.ALGORITHMS:
         raise _Skip("the algorithm must be SHA1, SHA256 or SHA512")
     digits = data.get("digits", totp.DEFAULT_DIGITS)
-    if not (_int(digits, min(totp.DIGITS), max(totp.DIGITS)) and digits in totp.DIGITS):
-        raise _Skip("the number of digits must be 6 or 8")
+    allowed = (totp.STEAM_DIGITS,) if kind == "steam" else totp.DIGITS
+    if not (_int(digits, 1, 10) and digits in allowed):
+        raise _Skip("the number of digits must be %s" % " or ".join(str(d) for d in allowed))
     period = data.get("period", totp.DEFAULT_PERIOD)
     if not _int(period, totp.MIN_PERIOD, totp.MAX_PERIOD):
         raise _Skip(f"the period must be {totp.MIN_PERIOD} to {totp.MAX_PERIOD} seconds")
@@ -334,6 +349,8 @@ def _code_from_backup(data) -> dict:
         created = 0.0  # the daemon uses the import time
     return {
         "id": b64encode(code_id),
+        "kind": kind,
+        "counter": counter,
         "site": site,
         "issuer": _label(data.get("issuer")),
         "account": _label(data.get("account")),

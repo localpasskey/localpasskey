@@ -43,6 +43,13 @@ class CodesBackupTests(unittest.TestCase):
     def header(self, data):
         return json.loads(data)
 
+    def plaintext(self, data):
+        doc = json.loads(data)
+        header = {key: doc[key] for key in ("format", "version", "kdf", "cipher")}
+        key = transfer._passphrase_key(PASSPHRASE, header["kdf"])
+        return AESGCM(key).decrypt(b64decode(doc["nonce"]), b64decode(doc["ciphertext"]),
+                                   transfer._header_aad(header))
+
     def test_round_trip_with_codes(self):
         passkey = make_passkey()
         codes = [make_code(), make_code(site="", issuer="ACME", algorithm="SHA256",
@@ -51,9 +58,9 @@ class CodesBackupTests(unittest.TestCase):
         self.assertEqual(loaded, [passkey])
         self.assertEqual(loaded.skipped, [])
         self.assertEqual(loaded.skipped_codes, [])
-        self.assertEqual(loaded.codes[0], codes[0])
+        self.assertEqual(loaded.codes[0], dict(codes[0], kind="totp", counter=0))
         # The setup key is written canonically, without spaces.
-        self.assertEqual(loaded.codes[1], dict(codes[1], secret="JBSWY3DPEHPK3PXP"))
+        self.assertEqual(loaded.codes[1], dict(codes[1], kind="totp", counter=0, secret="JBSWY3DPEHPK3PXP"))
         self.assertEqual(transfer.describe_code(loaded.codes[1])["id"], b64decode(codes[1]["id"]).hex())
 
     def test_version_1_without_codes(self):
@@ -69,23 +76,71 @@ class CodesBackupTests(unittest.TestCase):
         self.assertNotIn(b"github.com", data)
         self.assertNotIn(make_code()["secret"].encode(), data)
 
-    def test_old_reader_refuses_version_2(self):
-        def reader(data):  # what 0.3.1 does: only version 1 is known
-            doc = json.loads(data)
-            if doc.get("version") != transfer.BACKUP_VERSION:
-                raise TransferError("newer LocalPasskey")
-            return doc
+    def test_version_3_only_with_a_code_that_is_not_totp(self):
+        plain = make_code()
+        self.assertEqual(self.header(transfer.export_backup([], PASSPHRASE, [plain]))["version"], 2)
+        for code in (make_code(kind="hotp", counter=4), make_code(kind="steam", digits=5)):
+            data = transfer.export_backup([], PASSPHRASE, [plain, code])
+            self.assertEqual(self.header(data)["version"], transfer.CODE_KIND_BACKUP_VERSION)
+            self.assertEqual(transfer.CODE_KIND_BACKUP_VERSION, 3)
+            loaded = transfer.load(data, lambda: PASSPHRASE)
+            self.assertEqual(loaded.skipped_codes, [])
+            self.assertEqual(loaded.codes[1], dict(code, counter=code.get("counter", 0)), code["kind"])
+            self.assertEqual(loaded.codes[0], dict(plain, kind="totp", counter=0))
 
-        reader(transfer.export_backup([make_passkey()], PASSPHRASE))
+    def test_version_2_output_is_unchanged(self):
+        code = make_code()
+        data = transfer.export_backup([make_passkey()], PASSPHRASE, [code])
+        self.assertEqual(self.header(data)["version"], 2)
+        # The records go in exactly as the caller built them: no new keys are added.
+        self.assertEqual(json.loads(self.plaintext(data))["codes"], [code])
+        loaded = transfer.load(data, lambda: PASSPHRASE)
+        self.assertEqual(loaded.skipped_codes, [])
+        self.assertEqual(loaded.codes[0], dict(code, kind="totp", counter=0))
+
+    def test_bad_kind_and_counter_skipped(self):
+        cases = [
+            (make_code(kind="md5"), "kind"),
+            (make_code(kind=1), "kind"),
+            (make_code(kind="hotp", counter=-1), "counter"),
+            (make_code(kind="hotp", counter=2**53), "counter"),
+            (make_code(kind="hotp"), None),  # a missing counter is 0
+            (make_code(kind="steam", digits=6), "digits"),
+            (make_code(kind="steam", digits=5), None),
+            (make_code(counter=1), "counter"),  # only an HOTP code has a counter
+            (make_code(), None),  # neither new key
+        ]
+        loaded = transfer.load(transfer.export_backup([], PASSPHRASE, [c for c, _ in cases]),
+                               lambda: PASSPHRASE)
+        expected = [e for _, e in cases if e]
+        self.assertEqual(len(loaded.codes), len(cases) - len(expected))
+        for skipped, want in zip(loaded.skipped_codes, expected):
+            self.assertIn(want, skipped["reason"])
+        self.assertEqual((loaded.codes[0]["kind"], loaded.codes[0]["counter"]), ("hotp", 0))
+        self.assertEqual((loaded.codes[1]["kind"], loaded.codes[1]["digits"]), ("steam", 5))
+        self.assertEqual((loaded.codes[2]["kind"], loaded.codes[2]["counter"]), ("totp", 0))
+
+    def test_old_reader_refuses_version_2_and_3(self):
+        def reader(known):  # what an older LocalPasskey does: only the versions it knows
+            def read(data):
+                if json.loads(data).get("version") not in known:
+                    raise TransferError("newer LocalPasskey")
+            return read
+
+        reader({1})(transfer.export_backup([make_passkey()], PASSPHRASE))
         with self.assertRaises(TransferError):
-            reader(transfer.export_backup([make_passkey()], PASSPHRASE, [make_code()]))
+            reader({1})(transfer.export_backup([make_passkey()], PASSPHRASE, [make_code()]))
+        # 0.4.0 knows 2; a code that is not a plain TOTP would lose its kind and counter there.
+        reader({1, 2})(transfer.export_backup([make_passkey()], PASSPHRASE, [make_code()]))
+        with self.assertRaises(TransferError):
+            reader({1, 2})(transfer.export_backup([], PASSPHRASE, [make_code(kind="hotp")]))
 
     def test_tampered_version_refused(self):
         doc = json.loads(transfer.export_backup([], PASSPHRASE, [make_code()]))
         doc["version"] = 1  # the header is the associated data
         with self.assertRaises(WrongPassphrase):
             transfer.load(json.dumps(doc).encode(), lambda: PASSPHRASE)
-        doc["version"] = 3
+        doc["version"] = 4
         with self.assertRaises(TransferError):
             transfer.load(json.dumps(doc).encode(), lambda: PASSPHRASE)
 
@@ -106,7 +161,7 @@ class CodesBackupTests(unittest.TestCase):
         ]
         loaded = transfer.load(transfer.export_backup([], PASSPHRASE, [good] + [b[0] for b in bad]),
                                lambda: PASSPHRASE)
-        self.assertEqual(loaded.codes, [good])
+        self.assertEqual(loaded.codes, [dict(good, kind="totp", counter=0)])
         reasons = [s["reason"] for s in loaded.skipped_codes]
         self.assertEqual(len(reasons), len(bad))
         for reason, (_, expected) in zip(reasons, bad):
