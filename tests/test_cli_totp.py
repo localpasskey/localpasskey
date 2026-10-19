@@ -293,6 +293,16 @@ class CliTotpTests(unittest.TestCase):
         self.assertIn("Nothing to import.", out)
         self.assertEqual(self.checks(), [ACTION_MANAGE])
 
+        # Its own codes have their own websites, and a broken link imports nothing.
+        for text, message in (("otpauth-migration://offline?data=", "this migration link holds no codes"),
+                              (link, "do not apply")):
+            with self.subTest(text=text):
+                code, _, err = self.run_cli("totp", "add", "-y", "--site", "github.com", stdin=text + "\n")
+                self.assertEqual(code, 1)
+                if "do not apply" in message:
+                    self.assertIn(message, err)
+        self.assertEqual(len(self.codes()), 2)
+
     def test_code_rounds_a_fractional_remaining_time_up(self):
         self.store_code()
         for remaining, shown in ((12.001, 13), (12, 12), (0.4, 1)):

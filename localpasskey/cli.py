@@ -514,6 +514,8 @@ def cmd_totp_add(args):
 def _totp_add(args, tty):
     text = _read_setup_key()
     if text.strip().lower().startswith("otpauth-migration://"):
+        if args.site is not None or args.issuer is not None or args.account is not None:
+            raise CliError("a migration link holds several codes: --site, --issuer and --account do not apply")
         return _totp_migration(args, tty, text)
     try:
         parsed = totp.parse(text)
