@@ -14,6 +14,7 @@ from localpasskey.ctap2 import Verdict
 from localpasskey.polkit import ACTION_EXPORT, ACTION_MANAGE, ACTION_TOTP
 from localpasskey.store import TotpEntry, b64encode
 from tests import test_control
+from tests.test_totp import migration, migration_link, otp_parameters
 from tests.test_transfer import fast_kdf
 
 SECRET = bytes(range(1, 21))
@@ -216,6 +217,81 @@ class CliTotpTests(unittest.TestCase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("no authenticator code matches 'nothing'", err)
         self.assertEqual(len(self.checks()), 3)
+
+    def test_list_names_the_type_of_an_hotp_or_steam_code(self):
+        self.store_code(kind="hotp", counter=12)
+        self.store_code(site="store.steampowered.com", issuer="Steam", account="me", kind="steam", digits=5)
+        code, out, err = self.run_cli("totp", "list")
+        self.assertEqual(code, 0, err)
+        self.assertIn("HOTP · 6 digits · counter 12", out)
+        self.assertIn("Steam", out)
+        self.assertNotIn("5 digits · 30 s", out)
+
+    def test_code_of_an_hotp_entry_prints_its_counter_on_stderr(self):
+        hotp_entry = self.store_code(kind="hotp", counter=4)
+        code, out, err = self.run_cli("totp", "code", hotp_entry.id.hex()[:8])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, totp.hotp(SECRET, 4) + "\n")
+        self.assertEqual(err, "counter 4\n")
+        self.assertEqual(self.checks(), [ACTION_TOTP])
+        # An explicit request moves the counter on: the next code is the site's next one.
+        code, out, err = self.run_cli("totp", "code", hotp_entry.id.hex()[:8])
+        self.assertEqual(code, 0, err)
+        self.assertEqual((out, err), (totp.hotp(SECRET, 5) + "\n", "counter 5\n"))
+        self.assertEqual(self.codes()[0].counter, 6)
+
+    def test_add_saves_the_kind_and_counter_of_an_hotp_or_steam_link(self):
+        code, out, err = self.run_cli("totp", "add", "-y", "--site", "bank.example",
+                                      stdin=f"otpauth://hotp/Bank:me?secret={KEY}&counter=9\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("HOTP · 6 digits · counter 9", out)
+        [entry] = self.codes()
+        self.assertEqual((entry.kind, entry.counter), ("hotp", 9))
+        code, out, err = self.run_cli("totp", "add", "-y", "--site", "store.steampowered.com",
+                                      stdin=f"steam://{KEY}\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("Steam", out)
+        self.assertEqual({(e.site, e.kind) for e in self.codes()},
+                         {("bank.example", "hotp"), ("store.steampowered.com", "steam")})
+        self.assertEqual(self.checks(), [ACTION_MANAGE] * 2)
+
+    def test_add_imports_a_migration_link_with_one_prompt(self):
+        payload = b"".join([
+            migration([otp_parameters(secret=SECRET, name="GitHub:alice", issuer="GitHub", type=2)]),
+            migration([otp_parameters(secret=SECRET, name="Bank:me", issuer="Bank", type=1, counter=3)]),
+            migration([otp_parameters(secret=SECRET, name="Old:me", algorithm=4, type=2)]),
+        ])
+        link = migration_link(payload)
+
+        class Answering(io.StringIO):
+            def readline(self, *_):
+                return answer[0]
+
+        answer = ["n"]
+        with patch("localpasskey.cli._open_tty", return_value=Answering()), \
+                patch("localpasskey.cli.request", wraps=cli.request) as sent:
+            code, out, err = self.run_cli("totp", "add", stdin=link + "\n")
+        self.assertEqual(code, 1, err)
+        self.assertIn("MD5-based codes are not supported", out)
+        self.assertIn("Old:me", out)
+        self.assertIn("Nothing imported.", out)
+        self.assertEqual(self.codes(), [])
+        self.assertEqual(sent.call_count, 1, "no prompt answered: the plan is the only request")
+        self.assertEqual(self.checks(), [], "a plan asks for nothing")
+
+        code, out, err = self.run_cli("totp", "add", "-y", stdin=link + "\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("Imported 2 authenticator codes.", out)
+        stored = {(e.issuer, e.account): e for e in self.codes()}
+        self.assertEqual({key: (e.kind, e.counter) for key, e in stored.items()},
+                         {("GitHub", "alice"): ("totp", 0), ("Bank", "me"): ("hotp", 3)})
+        self.assertEqual(self.checks(), [ACTION_MANAGE])
+
+        # The same link again imports nothing: the IDs come from the entries.
+        code, out, err = self.run_cli("totp", "add", "-y", stdin=link + "\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("Nothing to import.", out)
+        self.assertEqual(self.checks(), [ACTION_MANAGE])
 
     def test_code_rounds_a_fractional_remaining_time_up(self):
         self.store_code()

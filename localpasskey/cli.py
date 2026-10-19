@@ -24,7 +24,7 @@ import time
 
 from . import totp, transfer
 from .client import ServiceError, request, socket_path
-from .store import _fsync_dir
+from .store import _fsync_dir, b64encode
 
 
 class CliError(Exception):
@@ -73,6 +73,10 @@ def _printable(text):
 
 
 def _code_type(code):
+    if code.get("kind") == "steam":
+        return "Steam"
+    if code.get("kind") == "hotp":
+        return f"HOTP · {code['digits']} digits · counter {code['counter']}"
     kind = f"{code['digits']} digits · {code['period']} s"
     return kind if code["algorithm"] == "SHA1" else f"{kind} · {code['algorithm']}"
 
@@ -508,8 +512,11 @@ def cmd_totp_add(args):
 
 
 def _totp_add(args, tty):
+    text = _read_setup_key()
+    if text.strip().lower().startswith("otpauth-migration://"):
+        return _totp_migration(args, tty, text)
     try:
-        parsed = totp.parse(_read_setup_key())
+        parsed = totp.parse(text)
     except totp.OtpError as e:
         raise CliError(str(e)) from None
     issuer = parsed["issuer"] if args.issuer is None else args.issuer.strip()
@@ -521,7 +528,8 @@ def _totp_add(args, tty):
             site = input(f"Website [{_printable(site)}]: " if site else "Website: ").strip() or site
     site = totp.normalize_site(site)  # "https://github.com/login" -> "github.com"
     entry = {"site": site, "issuer": issuer, "account": account, "algorithm": parsed["algorithm"],
-             "digits": parsed["digits"], "period": parsed["period"]}
+             "digits": parsed["digits"], "period": parsed["period"],
+             "kind": parsed["kind"], "counter": parsed["counter"]}
     _print_table(("WEBSITE", "ISSUER", "ACCOUNT", "TYPE"),
                  [(site or "-", issuer or "-", account or "-", _code_type(entry))])
     if not args.yes and _confirm("Save this authenticator code? [y/N] ", tty).strip().lower() not in ("y", "yes"):
@@ -530,6 +538,49 @@ def _totp_add(args, tty):
     entry["secret"] = totp.encode_secret(parsed["secret"])
     added = _ask({**_payload(args, "add", codes=True), "entry": entry}, args)["added"]
     print(f"Saved the authenticator code for {_code_name(added)}.")
+    return 0
+
+
+def _totp_migration(args, tty, text):
+    """A Google Authenticator export: the plan, one prompt, then one import request."""
+    try:
+        entries, skipped = totp.parse_migration(text)
+    except totp.OtpError as e:
+        raise CliError(str(e)) from None
+    records = []
+    for parsed in entries:
+        site = totp.normalize_site(totp.site_from_issuer(parsed["issuer"]))
+        records.append({
+            "id": b64encode(totp.migration_entry_id(parsed["kind"], parsed["issuer"], parsed["account"],
+                                                    parsed["secret"])),
+            "site": site, "issuer": parsed["issuer"], "account": parsed["account"],
+            "secret": totp.encode_secret(parsed["secret"]), "algorithm": parsed["algorithm"],
+            "digits": parsed["digits"], "period": parsed["period"],
+            "kind": parsed["kind"], "counter": parsed["counter"],
+        })
+    if not records:
+        raise CliError("this migration link holds no codes to import")
+    plan = request({**_payload(args, "import"), "credentials": [], "codes": records, "dry_run": True}, args.socket)
+    imported, imported_codes = plan["imported"], plan.get("imported_codes", [])
+    # A skipped entry only has the label from the link; it is shown where the issuer goes.
+    skipped_as_records = [{"code": {"id": "", "site": "", "issuer": label, "account": ""}, "reason": reason}
+                          for label, reason in skipped]
+    _print_plan(imported, imported_codes, plan["skipped"], skipped_as_records + plan.get("skipped_codes", []))
+    if not imported_codes:
+        print("Nothing to import.")
+        return 0
+    what = _these(len(imported), len(imported_codes))
+    if not args.yes and _confirm(f"Import {what}? [y/N] ", tty).strip().lower() not in ("y", "yes"):
+        print("Nothing imported.")
+        return 1
+    payload = {**_payload(args, "import"), "credentials": [],
+               "codes": planned_records(records, imported_codes, transfer.describe_code)}
+    result = _ask(payload, args)
+    done, late = result["imported_codes"], result["skipped_codes"]
+    print(f"Imported {join_counts(len(result['imported']), len(done))}"
+          + (f"; {len(result['skipped']) + len(late)} could no longer be imported:" if result["skipped"] or late
+             else "."))
+    _print_plan([], [], result["skipped"], late)
     return 0
 
 
@@ -552,7 +603,10 @@ def cmd_totp_code(args):
         raise CliError(f"no authenticator code with ID {matches[0]['id']}")  # deleted during the dialog
     [code] = reply["codes"]
     print(code["code"])
-    print(f"valid for {math.ceil(code['remaining'])} more seconds", file=sys.stderr)  # int or float
+    if code.get("kind") == "hotp":
+        print(f"counter {code['counter']}", file=sys.stderr)  # one-time: only this counter has it
+    else:
+        print(f"valid for {math.ceil(code['remaining'])} more seconds", file=sys.stderr)  # int or float
     return 0
 
 
