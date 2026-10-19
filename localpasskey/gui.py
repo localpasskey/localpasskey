@@ -25,7 +25,9 @@ import time
 from datetime import date, datetime, timedelta
 
 import qdarkstyle
-from PyQt6.QtCore import QEvent, QMimeData, QObject, QRectF, QSortFilterProxyModel, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import (
+    QEvent, QItemSelectionModel, QMimeData, QObject, QRectF, QSortFilterProxyModel, Qt, QTimer, QUrl, pyqtSignal,
+)
 from PyQt6.QtGui import (
     QAction, QColor, QDesktopServices, QFontDatabase, QGuiApplication, QIcon, QKeySequence, QPainter,
     QPainterPath, QPen, QPixmap, QStandardItem, QStandardItemModel,
@@ -62,12 +64,16 @@ COPY_CLEAR_MS = 30000
 HIDDEN_CODE = "••••••"
 LOCKED = "authenticator codes are locked"  # the service's error once an unlock has gone
 _SECOND_LEVEL = {"ac", "co", "com", "edu", "gov", "net", "org"}
-# Bulk confirmations: window title, button, question, what the passkeys do meanwhile.
+# Bulk confirmations: window title, button, question, what the items do meanwhile.
 BULK = {
     "delete": ("Move to Trash", "Move to Trash", "Move {n} passkey{s} to the trash?",
                "They stop working until you restore them."),
     "restore": ("Restore Passkeys", "Restore", "Restore {n} passkey{s} from the trash?",
                 "They sign you in again right away."),
+    "delete_codes": ("Move to Trash", "Move to Trash", "Move {n} authenticator code{s} to the trash?",
+                     "Their codes are not shown until you restore them."),
+    "restore_codes": ("Restore Codes", "Restore", "Restore {n} authenticator code{s} from the trash?",
+                      "They show codes again right away."),
 }
 
 
@@ -400,6 +406,17 @@ class Details(QFrame):
         self.purge_button.setEnabled(not busy)
 
 
+class CodeLabel(QLabel):
+    """The large code in the details panel: a double-click copies it, as the button does."""
+
+    def __init__(self, window):
+        super().__init__(HIDDEN_CODE)
+        self.window = window
+
+    def mouseDoubleClickEvent(self, event):
+        self.window.copy_code()
+
+
 class CodeDetails(QFrame):
     """One authenticator code: its current value, a countdown and its labels."""
 
@@ -411,7 +428,7 @@ class CodeDetails(QFrame):
         self.entry = None
         heading = self._heading()
 
-        self.code = QLabel(HIDDEN_CODE)
+        self.code = CodeLabel(window)
         self.code.setTextFormat(Qt.TextFormat.PlainText)
         font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         font.setBold(True)
@@ -420,7 +437,7 @@ class CodeDetails(QFrame):
         self.countdown = QLabel()
         self.countdown.setStyleSheet(f"color: {PALETTE.COLOR_TEXT_3};")
         self.copy_button = QPushButton("Copy Code")
-        self.copy_button.clicked.connect(window.copy_code)
+        self.copy_button.clicked.connect(lambda: window.copy_code())
         value = QHBoxLayout()
         value.setSpacing(14)
         value.addWidget(self.code)
@@ -921,6 +938,7 @@ class Window(QMainWindow):
         self.tasks = Tasks()
         self._creds = None
         self._selected_id = None
+        self._chosen = []  # every selected entry; the table keeps one selection across both tabs
         self._refreshing = False
         self._refresh_again = False
         self._busy = False
@@ -958,12 +976,13 @@ class Window(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.selectionModel().selectionChanged.connect(self._on_selection)
+        self.table.doubleClicked.connect(self._on_double_click)
         self.table.header().setStretchLastSection(False)
         self._size_columns()
 
@@ -1048,17 +1067,14 @@ class Window(QMainWindow):
                                   QKeySequence.StandardKey.Copy)
         self.open_action = action(self.passkey_menu, "&Open Website", lambda: self.open_site(self.details.cred))
         self.passkey_menu.addSeparator()
-        self.delete_action = action(self.passkey_menu, "Move to &Trash…",
-                                    lambda: self.confirm_delete(self.details.cred),
+        self.delete_action = action(self.passkey_menu, "Move to &Trash…", lambda: self.trash_chosen(delete=True),
                                     QKeySequence.StandardKey.Delete)
         self.site_delete_action = action(self.passkey_menu, "Move All for This &Website to Trash…",
                                          lambda: self._bulk("delete", {"site": self.details.cred["site"]}))
         self.all_delete_action = action(self.passkey_menu, "Move All Passkeys to Trash…",
                                         lambda: self._bulk("delete", {"all": True}))
         self.passkey_menu.addSeparator()
-        self.restore_action = action(self.passkey_menu, "&Restore",
-                                     lambda: self._send({"command": "restore", "ids": [self.details.cred["id"]]},
-                                                        "Restoring…", "Passkey restored"))
+        self.restore_action = action(self.passkey_menu, "&Restore", lambda: self.trash_chosen(delete=False))
         self.site_restore_action = action(self.passkey_menu, "Restore All for This We&bsite",
                                           lambda: self._bulk("restore", {"site": self.details.cred["site"]}))
         self.all_restore_action = action(self.passkey_menu, "Restore All",
@@ -1073,11 +1089,9 @@ class Window(QMainWindow):
         self.copy_code_action = action(self.code_menu, "&Copy Code", self.copy_code, QKeySequence.StandardKey.Copy)
         self.edit_code_action = action(self.code_menu, "&Edit…", lambda: self.edit_code(self.code_details.entry))
         self.code_menu.addSeparator()
-        self.delete_code_action = action(self.code_menu, "Move to &Trash…",
-                                         lambda: self.confirm_delete_code(self.code_details.entry),
+        self.delete_code_action = action(self.code_menu, "Move to &Trash…", lambda: self.trash_chosen(delete=True),
                                          QKeySequence.StandardKey.Delete)
-        self.restore_code_action = action(self.code_menu, "&Restore",
-                                          lambda: self.restore_code(self.code_details.entry))
+        self.restore_code_action = action(self.code_menu, "&Restore", lambda: self.trash_chosen(delete=False))
         self.purge_code_action = action(self.code_menu, "Delete &Permanently…",
                                         lambda: self.confirm_purge_code(self.code_details.entry))
         search = QAction(self)
@@ -1117,6 +1131,7 @@ class Window(QMainWindow):
         self.refresh()
         self._creds = None  # the other tab's rows must not stay under this tab's details
         self._selected_id = None
+        self._chosen = []
         self._rebuild()
 
     def unlock_codes(self):
@@ -1224,6 +1239,7 @@ class Window(QMainWindow):
         self._values = {}  # leaving the trash fetches them again, not minutes-old ones
         self._creds = None  # forces a rebuild when the new list arrives, even if both are empty
         self._selected_id = None
+        self._chosen = []
         self.refresh()
 
     def refresh(self):
@@ -1312,7 +1328,9 @@ class Window(QMainWindow):
         self.pin_button.setAccessibleName(summary)
 
     def _rebuild(self):
-        selected = self._selected_id
+        chosen = list(self._chosen)  # the rows below are new; _restore selects these again
+        if self.table.model() is not None:
+            self.table.clearSelection()  # before the model goes: clearing after it does nothing
         self.model.setHorizontalHeaderLabels(
             TRASH_COLUMNS if self._trash else CODE_COLUMNS if self._codes_tab else COLUMNS)
         self.proxy.setSourceModel(None)  # one sort and filter pass, not one per row
@@ -1326,7 +1344,7 @@ class Window(QMainWindow):
                 self.model.appendRow(code_row(entry, self._trash, value and value[0]))
         self.proxy.setSourceModel(self.model)
         self._size_columns()  # reattaching the model reset the header's sections
-        self._restore(selected)
+        self._restore(self._selected_id, chosen)
         self._show_count()  # an unlock or lock rebuilds without a reload
 
     def _size_columns(self):
@@ -1341,31 +1359,39 @@ class Window(QMainWindow):
                 return row
         return None
 
-    def _restore(self, cred_id):
-        """Keep cred_id selected if visible, else select the first row, else show the empty state."""
-        row = self._proxy_row_of(cred_id) if cred_id else None
-        if row is None:
+    def _restore(self, cred_id=None, chosen=None):
+        """Select the rows still visible, else the first row, else show the empty state."""
+        chosen = chosen or ([{"id": cred_id}] if cred_id else [])
+        rows = [row for row in (self._proxy_row_of(cred["id"]) for cred in chosen) if row is not None]
+        model = self.table.selectionModel()
+        if not rows:
             self.table.clearSelection()
-            row = 0 if self.proxy.rowCount() else None
-        if row is not None and not self.table.selectionModel().isRowSelected(row):
-            self.table.setCurrentIndex(self.proxy.index(row, 0))
-        if not self.table.selectionModel().hasSelection():
+            rows = [0] if self.proxy.rowCount() else []
+        if len(rows) == 1 and not model.isRowSelected(rows[0]):
+            self.table.setCurrentIndex(self.proxy.index(rows[0], 0))
+        elif len(rows) > 1:  # a refresh must not throw away a shift-click selection
+            model.select(self.proxy.index(rows[0], 0),
+                         QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows)
+            for row in rows[1:]:
+                model.select(self.proxy.index(row, 0), QItemSelectionModel.SelectionFlag.Select
+                             | QItemSelectionModel.SelectionFlag.Rows)
+        if not model.hasSelection():
             self._show(None)
 
     def _on_search(self, text):
         self.proxy.set_query(text)
-        self._restore(self._selected_id)
+        self._restore(self._selected_id, self._chosen)
 
     def _on_selection(self, *_):
-        rows = self.table.selectionModel().selectedRows()
-        self._show(rows[0].data(CRED_ROLE) if rows else None)
+        self._chosen = [index.data(CRED_ROLE) for index in self.table.selectionModel().selectedRows()]
+        self._show(self._chosen[0] if len(self._chosen) == 1 else None)
 
     def _resync(self):
         """Re-enable the actions for whatever is selected now."""
         current = self.code_details.entry if self._codes_tab else self.details.cred
-        self._sync_actions(current if self._selected_id else None)
+        self._sync_actions(current if self._selected_id else None, len(self._chosen) > 1)
 
-    def _sync_actions(self, cred):
+    def _sync_actions(self, cred, many=False):
         """Enable exactly the actions the current view and selection allow."""
         for act in self.trash_actions:
             act.setVisible(self._trash)
@@ -1375,29 +1401,38 @@ class Window(QMainWindow):
         self.all_restore_action.setEnabled(self._trash and not self._busy)
         self.import_action.setEnabled(not self._busy)
         self.export_action.setEnabled(not self._busy)
-        chosen = cred is not None
-        for act in (self.copy_action, self.open_action, self.delete_action, self.site_delete_action,
-                    self.restore_action, self.site_restore_action, self.purge_action):
-            act.setEnabled(chosen and not self._busy)
-        if chosen:
+        for act in (self.copy_action, self.open_action, self.site_delete_action, self.site_restore_action,
+                    self.purge_action):
+            act.setEnabled(cred is not None and not self._busy)
+        for act in (self.delete_action, self.restore_action):  # these two take every selected row
+            act.setEnabled(not self._busy and (cred is not None or many))
+        if cred is not None:
             self.open_action.setEnabled(is_website(cred["site"]) and not self._trash and not self._busy)
             self.copy_action.setEnabled(bool(cred.get("user_name")) and not self._busy)
         codes = self._codes_tab
         if codes:  # one menu at a time: Ctrl+C and Delete mean the code here
             for act in self.passkey_menu.actions():
                 act.setEnabled(False)
-        live, trashed = codes and chosen and not self._trash, codes and chosen and self._trash
+        live, trashed = codes and cred is not None and not self._trash, codes and cred is not None and self._trash
+        some = codes and (cred is not None or many) and not self._busy  # Move to Trash and Restore take several
         self.add_code_action.setEnabled(codes and not self._busy)
         self.copy_code_action.setEnabled(live and cred["id"] in self._values)
-        for act in (self.edit_code_action, self.delete_code_action):
-            act.setVisible(not self._trash)
-            act.setEnabled(live and not self._busy)
-        for act in (self.restore_code_action, self.purge_code_action):
-            act.setVisible(self._trash)
-            act.setEnabled(trashed and not self._busy)
+        self.edit_code_action.setVisible(not self._trash)
+        self.edit_code_action.setEnabled(live and not self._busy)
+        self.delete_code_action.setVisible(not self._trash)
+        self.delete_code_action.setEnabled(some and not self._trash)
+        self.restore_code_action.setVisible(self._trash)
+        self.restore_code_action.setEnabled(some and self._trash)
+        self.purge_code_action.setVisible(self._trash)
+        self.purge_code_action.setEnabled(trashed and not self._busy)
 
     def _show(self, cred):
-        self._sync_actions(cred)
+        self._sync_actions(cred, len(self._chosen) > 1)
+        if len(self._chosen) > 1:
+            self._selected_id = None
+            self.message.set_message((plural_codes if self._codes_tab else plural)(len(self._chosen)) + " selected")
+            self.side.setCurrentWidget(self.message)
+            return
         if self._codes_tab:
             self._show_code(cred)
             return
@@ -1464,18 +1499,27 @@ class Window(QMainWindow):
         self.side.setCurrentWidget(self.message)
 
     def _context_menu(self, position):
-        if self.table.indexAt(position).isValid():
-            menu = self.code_menu if self._codes_tab else self.passkey_menu
-            menu.exec(self.table.viewport().mapToGlobal(position))
+        if not self._codes_tab:  # passkeys are added from a browser, so only a row has a menu
+            if self.table.indexAt(position).isValid():
+                self.passkey_menu.exec(self.table.viewport().mapToGlobal(position))
+            return
+        if not self.table.indexAt(position).isValid():  # empty space: Add Code is the only action
+            self.table.clearSelection()
+        self.code_menu.exec(self.table.viewport().mapToGlobal(position))
+
+    def _on_double_click(self, index):
+        """A double-click copies that row's code, as Copy Code does; nothing when it is not known yet."""
+        if self._codes_tab and not self._trash and index.isValid():
+            self.copy_code(index.data(CRED_ROLE)["id"])
 
     def copy(self, text, what):
         QGuiApplication.clipboard().setText(text)
         self.statusBar().showMessage(f"{what} copied", 3000)
 
-    def copy_code(self):
-        """Copy the selected code, marked secret for clipboard managers, for 30 seconds."""
-        entry = self.code_details.entry if self._codes_tab and self._selected_id else None
-        value = self._values.get(entry["id"]) if entry else None
+    def copy_code(self, entry_id=None):
+        """Copy a code, marked secret for clipboard managers, for 30 seconds."""
+        entry_id = entry_id or (self.code_details.entry["id"] if self._codes_tab and self._selected_id else None)
+        value = self._values.get(entry_id)
         if value is None:
             return
         data = QMimeData()
@@ -1544,6 +1588,26 @@ class Window(QMainWindow):
 
         self.tasks.run(lambda: request({"command": command, **selector, "dry_run": True})["deleted"], loaded)
 
+    def trash_chosen(self, delete):
+        """Move to Trash or Restore for every selected row: one confirmation, one request."""
+        if self._busy or not self._chosen:
+            return
+        one = self._chosen[0]
+        if len(self._chosen) == 1:  # the single row's own wording and confirmation
+            if self._codes_tab:
+                if delete:
+                    self.confirm_delete_code(one)
+                else:
+                    self.restore_code(one)
+            elif delete:
+                self.confirm_delete(one)
+            else:
+                self._send({"command": "restore", "ids": [one["id"]]}, "Restoring…", "Passkey restored")
+            return
+        command = ("delete" if delete else "restore") + ("_codes" if self._codes_tab else "")
+        title, button_text, question, note = BULK[command]
+        self._confirm_doomed(command, self._chosen, title, button_text, question, note)
+
     def _confirm_doomed(self, command, doomed, title, button_text, question, note):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
@@ -1558,8 +1622,12 @@ class Window(QMainWindow):
         if box.clickedButton() is not go:
             self._resync()
             return
-        done = "Moved {n} passkey{s} to the trash" if command == "delete" else "Restored {n} passkey{s}"
-        self._send({"command": command, "ids": [cred["id"] for cred in doomed]},
+        codes = command.endswith("_codes")
+        command = command.removesuffix("_codes")
+        noun = "authenticator code{s}" if codes else "passkey{s}"
+        done = f"Moved {{n}} {noun} to the trash" if command == "delete" else f"Restored {{n}} {noun}"
+        payload = {"command": "totp", "action": command} if codes else {"command": command}
+        self._send({**payload, "ids": [cred["id"] for cred in doomed]},
                    "Waiting for you to authenticate…",
                    done.format(n=len(doomed), s="s" if len(doomed) != 1 else ""))
 

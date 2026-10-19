@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 try:
-    from PyQt6.QtCore import QEvent, Qt, QTimer
+    from PyQt6.QtCore import QEvent, QItemSelectionModel, Qt, QTimer
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
@@ -94,6 +94,19 @@ class WindowTests(unittest.TestCase):
         if self.window.trash_action.isChecked() != on:
             self.window.trash_action.toggle()
         self.wait_for(lambda: not self.window._refreshing and self.window._creds is not None)
+
+    def select_rows(self, *titles):
+        """Select these rows as a Shift-click would, replacing any earlier selection."""
+        rows = [self.row_of(title) for title in titles]
+        model = self.window.table.selectionModel()
+        model.clearSelection()
+        for row in rows:
+            model.select(self.window.proxy.index(row, 0),
+                         QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+
+    def row_of(self, title):
+        return next(r for r in range(self.window.proxy.rowCount())
+                    if self.window.proxy.index(r, 0).data(Qt.ItemDataRole.DisplayRole) == title)
 
     def summaries(self):
         return sorted(cred["site"] for cred in self.window._creds)
@@ -410,6 +423,35 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.model.rowCount(), 9)
         self.assertEqual(self.server.store.trash(self.uid, self.username), [])
 
+    def test_several_rows_move_to_the_trash_in_one_request_and_come_back_together(self):
+        self.select_rows("github.com", "proton.me")
+        self.assertEqual(self.window.message.title.text(), "2 passkeys selected")
+        self.assertTrue(self.window.delete_action.isEnabled())
+        self.assertFalse(self.window.copy_action.isEnabled(), "there is no one username to copy")
+        self.assertFalse(self.window.site_delete_action.isEnabled())
+        self.assertFalse(self.window.purge_action.isEnabled(), "permanent deletion stays one passkey at a time")
+        seen = []
+        self.answer_delete(True, seen)
+        QTest.keyClick(self.window.table, Qt.Key.Key_Delete)
+        self.wait_for(lambda: self.window.model.rowCount() == 5 and not self.window._refreshing)
+        self.assertEqual(seen[0].text(), "Move 2 passkeys to the trash?")
+        self.assertEqual(self.window.statusBar().currentMessage(), "Moved 2 passkeys to the trash")
+        trashed = sorted(c.rp_id for c in self.server.store.trash(self.uid, self.username))
+        self.assertEqual(trashed, ["github.com", "github.com", "gitlab.com", "proton.me"])
+
+        self.set_trash_view(True)
+        self.select_rows("github.com", "proton.me")
+        self.assertEqual(self.window.model.rowCount(), 4)
+        seen = []
+        self.answer_delete(True, seen)
+        self.window.restore_action.trigger()  # Restore asks once, for the count
+        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 2)
+        self.assertEqual(seen[0].text(), "Restore 2 passkeys from the trash?")
+        self.assertEqual(self.window.statusBar().currentMessage(), "Restored 2 passkeys")
+        self.assertEqual(sorted(c["site"] for c in self.window._creds), ["github.com", "gitlab.com"])
+        self.set_trash_view(False)
+        self.assertEqual(self.window.model.rowCount(), 7)
+
     def test_bulk_action_cancelled_asks_the_daemon_nothing_but_the_dry_run(self):
         seen = []
         self.answer_delete(False, seen)
@@ -535,6 +577,8 @@ class CodesTabTests(unittest.TestCase):
     wait_for = WindowTests.wait_for
     answer_dialog = WindowTests.answer_dialog
     answer_delete = WindowTests.answer_delete
+    select_rows = WindowTests.select_rows
+    row_of = WindowTests.row_of
     destructive = staticmethod(WindowTests.destructive)
 
     def setUp(self):
@@ -572,6 +616,7 @@ class CodesTabTests(unittest.TestCase):
     def select(self, title):
         row = next(r for r in range(self.window.proxy.rowCount())
                    if self.window.proxy.index(r, 0).data(Qt.ItemDataRole.DisplayRole) == title)
+        self.window.table.clearSelection()
         self.window.table.setCurrentIndex(self.window.proxy.index(row, 0))
 
     @unittest.skipIf(os.getuid() == 0, "root is always unlocked")
@@ -915,6 +960,68 @@ class CodesTabTests(unittest.TestCase):
                 self.assertEqual(self.window.statusBar().currentMessage(),
                                  "Not saved: another request is still running. Try again when it finishes.")
         self.window._busy = False
+
+    def test_several_code_rows_move_to_the_trash_in_one_request(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.select_rows("github.com", "google.com")
+        self.assertEqual(self.window.message.title.text(), "2 authenticator codes selected")
+        self.assertFalse(self.window.code_details.code.isVisible(), "no one code to show")
+        seen = []
+        self.answer_delete(True, seen)
+        QTest.keyClick(self.window.table, Qt.Key.Key_Delete)
+        self.wait_for(lambda: not self.window._busy and self.window.model.rowCount() == 1)
+        self.assertEqual(seen[0].text(), "Move 2 authenticator codes to the trash?")
+        self.assertEqual(self.window.statusBar().currentMessage(), "Moved 2 authenticator codes to the trash")
+        self.assertEqual(len(self.server.store.totp_entries(self.uid, self.username)), 1)
+        self.assertEqual(sorted(e.issuer for e in self.server.store.totp_trash(self.uid, self.username)),
+                         ["GitHub", "GitLab", "Google"])
+
+    def test_ctrl_n_adds_a_code_on_the_codes_tab_and_does_nothing_on_the_passkeys_tab(self):
+        def accepted(dialog):
+            dialog.key.setText("JBSWY3DPEHPK3PXP")
+            dialog.save_button.click()
+            return gui.QDialog.DialogCode.Accepted
+
+        self.window.tabs.setCurrentIndex(0)
+        self.wait_for(lambda: not self.window._refreshing)
+        with patch.object(gui.CodeDialog, "exec", accepted):
+            QTest.keyClick(self.window, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(self.window.findChildren(gui.CodeDialog), [], "the dialog never opened")
+        self.open_codes()
+        with patch.object(gui.CodeDialog, "exec", accepted):
+            QTest.keyClick(self.window, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
+        self.wait_for(lambda: not self.window._busy and not self.window._refreshing)
+        self.assertEqual(self.window.statusBar().currentMessage(), "Authenticator code added")
+
+    def test_double_click_copies_that_row_s_code(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        index = self.window.proxy.index(self.row_of("google.com"), 0)
+        self.select("github.com")
+        self.window._on_double_click(index)  # what the table's doubleClicked signal calls
+        clipboard = self.app.clipboard()
+        self.assertEqual(clipboard.text(), self.expected("google.com"), "the double-clicked row, not the selection")
+        self.assertEqual(bytes(clipboard.mimeData().data("x-kde-passwordManagerHint")), b"secret")
+        self.assertEqual(self.window.statusBar().currentMessage(), "Code copied; the clipboard is cleared in 30 s")
+
+    def test_double_click_does_nothing_while_the_code_is_not_known(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        index = self.window.proxy.index(self.row_of("github.com"), 0)
+        self.window._values = {}
+        QApplication.clipboard().clear()
+        before = self.window.statusBar().currentMessage()
+        self.window._on_double_click(index)
+        self.assertEqual(self.app.clipboard().text(), "", "no code to copy")
+        self.assertEqual(self.window.statusBar().currentMessage(), before, "and no error either")
+
+    def test_double_click_on_the_big_code_copies_it_too(self):
+        self.open_codes()
+        self.wait_for(lambda: len(self.window._values) == 3)
+        self.select("github.com")
+        self.window.code_details.code.mouseDoubleClickEvent(None)
+        self.assertEqual(self.app.clipboard().text(), self.expected("github.com"))
 
     def test_trash_lists_deleted_codes_and_purge_needs_the_site_typed(self):
         self.open_codes()

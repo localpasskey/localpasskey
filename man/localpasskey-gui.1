@@ -18,6 +18,14 @@ there, the Passkey menu or a right-click, you can copy the username, open the
 website, or move the passkey to the trash. Moving to the trash asks for
 confirmation, and then for your password.
 .PP
+The list takes several rows at once: click with Shift to extend the selection
+or with Ctrl to add a row, and Ctrl+A selects them all.
+.B Move to Trash\[u2026]
+and
+.B Restore
+then act on every selected row after one confirmation, sent to the service as
+one request, and the side panel says how many are selected.
+.PP
 A passkey in the trash stops working but is not destroyed. Besides
 .B Move to Trash\[u2026]
 for the selected passkey, the Passkey menu has
@@ -62,7 +70,17 @@ it restarts, for example), also while the trash is shown; the tab then shows
 .B Unlock
 again.
 .PP
-In this tab the Code menu, also on right-click, replaces the Passkey menu.
+In this tab the Code menu, also on right-click, replaces the Passkey menu;
+a right-click on the empty space below the rows offers
+.BR "Add Code\[u2026]" .
+The list takes several rows at once, as the passkey list does, and
+.B Move to Trash\[u2026]
+and
+.B Restore
+act on all of them. Double-clicking a row, or the large code in the details,
+copies that code as
+.B Copy Code
+does.
 .B Add Code\[u2026]
 takes the
 .B otpauth://totp/
@@ -169,7 +187,8 @@ Ctrl+N
 Add an authenticator code (in the Authenticator Codes tab).
 .TP
 Delete
-Move the selected passkey or authenticator code to the trash.
+Move the selected passkey or authenticator code to the trash; with several
+rows selected, all of them, after one confirmation.
 .TP
 F5
 Refresh the list.
