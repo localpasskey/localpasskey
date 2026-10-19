@@ -50,10 +50,12 @@ The
 .B Authenticator Codes
 tab next to
 .B Passkeys
-lists the time-based one-time codes (TOTP) that the service keeps for sites
-that ask for one as a second step. They complement passkeys and do not
-replace them: a fake site can ask for a code and pass it on, which it cannot
-do with a passkey. Opening the tab asks for your password once (polkit action
+lists the one-time codes that the service keeps for sites that ask for one as
+a second step: time-based ones (TOTP), Steam Guard's five characters, and
+counter-based ones (HOTP), whose codes must be used in order. They complement
+passkeys and do not replace them: a fake site can ask for a code and pass it
+on, which it cannot do with a passkey. Opening the tab asks for your password
+once (polkit action
 .BR org.localpasskey.totp );
 until then it shows a locked message with an
 .B Unlock
@@ -62,11 +64,17 @@ changes by itself, and the details show it in large digits with a countdown
 and a
 .B Copy Code
 button. Copied codes are removed from the clipboard after 30 seconds if they
-are still there. Codes are hidden while the window is in the background. The
-tab locks again when you leave it or close the window. It also locks once the
-window has asked for no code for 5 minutes, for example while in the
-background, and within a few seconds of the service dropping the unlock (when
-it restarts, for example), also while the trash is shown; the tab then shows
+are still there. An HOTP code has no countdown and no code until you ask: its
+details show the counter the next code will use instead.
+.B Next Code
+in the details, or in the Code menu, asks the service for that code and moves
+the counter on. Showing the codes never uses a counter, and neither does
+copying the code shown. Codes are hidden while the window is in the
+background. The tab locks again when you leave it or close the window. It also
+locks once the window has asked for no code for 5 minutes, for example while
+in the background, and within a few seconds of the service dropping the unlock
+(when it restarts, for example), also while the trash is shown; the tab then
+shows
 .B Unlock
 again.
 .PP
@@ -84,7 +92,15 @@ does.
 .B Add Code\[u2026]
 takes the
 .B otpauth://totp/
-link or the setup key that the site shows next to its QR code; type it or
+link, an
+.B otpauth://hotp/
+link with its
+.B counter
+parameter, a
+.B steam://
+link or a link with
+.BR encoder=steam ,
+or the setup key that the site shows next to its QR code; type it or
 use
 .BR Paste ,
 which reads the clipboard only when clicked. The dialog checks it as you
@@ -93,13 +109,18 @@ website. A full address typed as the website, such as
 .BR https://github.com/login ,
 is saved as its host name, and so is one with a path or port such as
 .BR github.com:443 .
-Steam codes
-.RB ( steam://
-links and links with
-.BR \%encoder=steam )
-are not supported. After saving, the window clears the clipboard if
-it still holds the pasted text. The key field hides what you type unless you
-click
+A Google Authenticator export link
+.RB ( otpauth-migration:// ,
+from
+.I Transfer accounts
+\(->
+.IR "Export accounts" )
+is read too: the dialog says how many codes it holds and why any are skipped
+(for example, MD5-based ones), and
+.B Save
+imports them all with a single confirmation. After saving, the window clears
+the clipboard if it still holds the pasted text. The key field hides what you
+type unless you click
 .BR Show ;
 the window never shows or copies a saved setup key.
 .B Edit\[u2026]

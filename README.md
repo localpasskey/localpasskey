@@ -182,8 +182,10 @@ Open **LocalPasskey** from the applications menu (or run `localpasskey-gui`).
 The window lists your passkeys by website, account and last use; click a column
 header to sort, or type in the search field (Ctrl+F). Selecting a passkey shows
 its details, with buttons to copy the username, open the website or move it to
-the trash; the same actions are in the Passkey menu and on right-click. New
-passkeys appear within a few seconds of creating them in a browser.
+the trash; the same actions are in the Passkey menu and on right-click. Shift-
+or Ctrl-click selects several rows, and *Move to Trash…* (Delete) or *Restore*
+then acts on all of them after one confirmation. New passkeys appear within a
+few seconds of creating them in a browser.
 
 The same is available from a terminal:
 
@@ -323,12 +325,18 @@ including an HOTP code's next counter.
 
 In the window, the **Authenticator Codes** tab next to *Passkeys* lists your
 codes by website and account. Opening the tab asks for your password once;
-then the current codes are shown with a countdown and refresh by themselves.
-*Code → Add Code…* (Ctrl+N) takes the pasted link or setup key and checks it
-as you type. *Copy Code* (Ctrl+C) copies the current code; the clipboard is
-cleared after 30 seconds if it still holds the code. *Edit…* changes the
-website, issuer and account, and *Move to Trash…*, *Restore* and
-*Delete Permanently…* work as they do for passkeys. Codes are hidden while
+then the current codes are shown with a countdown and refresh by themselves;
+a Steam code shows its five characters. *Code → Add Code…* (Ctrl+N, or a
+right-click below the rows) takes the pasted link or setup key and checks it
+as you type; a Google Authenticator export link shows how many codes it holds
+and why any are skipped, then imports them all with one confirmation.
+*Copy Code* (Ctrl+C), or a double-click on a row or the large code, copies
+the current code; the clipboard is cleared after 30 seconds if it still holds
+the code. An HOTP code shows its counter instead of a countdown, and gets its
+next code only on *Next Code*, which moves the counter on; showing or copying
+codes never does. *Edit…* changes the website, issuer and account, and
+*Move to Trash…*, *Restore* and *Delete Permanently…* work as they do for
+passkeys, *Move to Trash…* and *Restore* on every selected row. Codes are hidden while
 the window is in the background. The tab locks again when you leave it or
 close the window. It also locks once the window has asked for no code for 5
 minutes, for example while in the background, and within a few seconds of
