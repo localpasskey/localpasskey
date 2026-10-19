@@ -1430,9 +1430,9 @@ class Window(QMainWindow):
     def _resync(self):
         """Re-enable the actions for whatever is selected now."""
         current = self.code_details.entry if self._codes_tab else self.details.cred
-        self._sync_actions(current if self._selected_id else None, len(self._chosen) > 1)
+        self._sync_actions(current if self._selected_id else None)
 
-    def _sync_actions(self, cred, many=False):
+    def _sync_actions(self, cred):
         """Enable exactly the actions the current view and selection allow."""
         for act in self.trash_actions:
             act.setVisible(self._trash)
@@ -1446,7 +1446,7 @@ class Window(QMainWindow):
                     self.purge_action):
             act.setEnabled(cred is not None and not self._busy)
         for act in (self.delete_action, self.restore_action):  # these two take every selected row
-            act.setEnabled(not self._busy and (cred is not None or many))
+            act.setEnabled(not self._busy and (cred is not None or len(self._chosen) > 1))
         if cred is not None:
             self.open_action.setEnabled(is_website(cred["site"]) and not self._trash and not self._busy)
             self.copy_action.setEnabled(bool(cred.get("user_name")) and not self._busy)
@@ -1455,7 +1455,7 @@ class Window(QMainWindow):
             for act in self.passkey_menu.actions():
                 act.setEnabled(False)
         live, trashed = codes and cred is not None and not self._trash, codes and cred is not None and self._trash
-        some = codes and (cred is not None or many) and not self._busy  # Move to Trash and Restore take several
+        some = codes and (cred is not None or len(self._chosen) > 1) and not self._busy  # Move to Trash and Restore take several
         self.add_code_action.setEnabled(codes and not self._busy)
         self.copy_code_action.setEnabled(live and cred["id"] in self._values)
         self.next_code_action.setVisible(not self._trash)
@@ -1470,7 +1470,7 @@ class Window(QMainWindow):
         self.purge_code_action.setEnabled(trashed and not self._busy)
 
     def _show(self, cred):
-        self._sync_actions(cred, len(self._chosen) > 1)
+        self._sync_actions(cred)
         if len(self._chosen) > 1:
             self._selected_id = None
             self.message.set_message((plural_codes if self._codes_tab else plural)(len(self._chosen)) + " selected")

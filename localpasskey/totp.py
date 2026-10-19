@@ -81,18 +81,6 @@ def _number(value: str, name: str) -> int:
     return int(value)
 
 
-def _counter(value: str, name: str = "counter") -> int:
-    # A JavaScript client shows this link too: keep the counter a safe integer.
-    if not _COUNTER.fullmatch(value) or int(value) > MAX_COUNTER:
-        raise OtpError(f"the {name} parameter must be 0 to {MAX_COUNTER}")
-    return int(value)
-
-
-def _steam(result: dict) -> dict:
-    result.update(kind="steam", algorithm="SHA1", digits=STEAM_DIGITS, period=DEFAULT_PERIOD, counter=0)
-    return result
-
-
 def parse(text: str) -> dict:
     """Parse a pasted ``otpauth://`` link or bare setup key.
 
@@ -122,7 +110,7 @@ def parse(text: str) -> dict:
     scheme, kind = url.scheme.lower(), url.netloc.lower()
     if scheme == "steam":
         result["secret"] = decode_secret(url.netloc + url.path)  # steam://BASE32
-        return _steam(result)
+        return dict(result, kind="steam", digits=STEAM_DIGITS)
     if scheme != "otpauth" or kind not in ("totp", "hotp", "steam"):
         raise OtpError("not an otpauth://totp/ link or a setup key")
 
@@ -140,7 +128,7 @@ def parse(text: str) -> dict:
         else:
             # otpauth://steam/BASE32 has the key in the path and no label.
             result["secret"] = decode_secret(url.path[1:])
-        return _steam(result)
+        return dict(result, kind="steam", digits=STEAM_DIGITS)
 
     encoder = params.get("encoder", "").strip().lower()
     if encoder and encoder != "steam":
@@ -154,12 +142,16 @@ def parse(text: str) -> dict:
     result["account"] = _clean_label(account)
     if encoder == "steam":
         # Before the checks below: its own alphabet, and producers write digits=5.
-        return _steam(result)
+        return dict(result, kind="steam", digits=STEAM_DIGITS)
     if kind == "hotp":
         if "counter" not in params:
             raise OtpError("the link has no counter parameter")
         result["kind"] = "hotp"
-        result["counter"] = _counter(params["counter"])
+        counter = params["counter"]
+        # A JavaScript client shows this link too: keep the counter a safe integer.
+        if not _COUNTER.fullmatch(counter) or int(counter) > MAX_COUNTER:
+            raise OtpError(f"the counter parameter must be 0 to {MAX_COUNTER}")
+        result["counter"] = int(counter)
     if "algorithm" in params:
         algorithm = params["algorithm"].upper().replace("-", "")
         if algorithm not in ALGORITHMS:
@@ -310,8 +302,7 @@ def _migration_entries(payload: bytes) -> Tuple[list, list]:
 
 def migration_entry_id(kind: str, issuer: str, account: str, secret: bytes) -> bytes:
     """The stable 16-byte ID of a migration entry: importing the same batch twice is idempotent."""
-    data = b"\0".join([kind.encode(), issuer.encode("utf-8", "surrogateescape"),
-                       account.encode("utf-8", "surrogateescape"), secret])
+    data = b"\0".join([kind.encode(), issuer.encode(), account.encode(), secret])
     return hashlib.blake2b(data, key=b"lpk-migration", digest_size=16).digest()
 
 
@@ -333,12 +324,8 @@ def hotp(secret: bytes, counter: int, algorithm: str = "SHA1", digits: int = 6) 
 
 def steam_code(secret: bytes, counter: int) -> str:
     """The Steam Guard code for ``counter``: five characters of Steam's alphabet."""
-    value = _truncate(secret, counter, "SHA1")
-    chars = []
-    for _ in range(STEAM_DIGITS):
-        value, index = divmod(value, len(STEAM_ALPHABET))
-        chars.append(STEAM_ALPHABET[index])
-    return "".join(chars)
+    value, base = _truncate(secret, counter, "SHA1"), len(STEAM_ALPHABET)
+    return "".join(STEAM_ALPHABET[value // base**i % base] for i in range(STEAM_DIGITS))
 
 
 def code(
