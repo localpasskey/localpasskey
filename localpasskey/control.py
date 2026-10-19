@@ -99,8 +99,9 @@ def record(cred, private_key: bytes) -> dict:
 
 
 def describe_totp(entry) -> dict:
-    return {
+    data = {
         "id": entry.id.hex(),
+        "kind": entry.kind,
         "site": entry.site,
         "issuer": entry.issuer,
         "account": entry.account,
@@ -110,11 +111,14 @@ def describe_totp(entry) -> dict:
         "created": entry.created,
         "deleted": entry.deleted,
     }
+    if entry.kind == "hotp":
+        data["counter"] = entry.counter  # the next one to use
+    return data
 
 
 def code_record(entry, secret: bytes) -> dict:
     """One authenticator code, plaintext, as sent by export."""
-    return {
+    data = {
         "id": b64encode(entry.id),
         "site": entry.site,
         "issuer": entry.issuer,
@@ -125,6 +129,12 @@ def code_record(entry, secret: bytes) -> dict:
         "period": entry.period,
         "created": entry.created,
     }
+    # Like totp.json: a plain TOTP record keeps the keys a version 2 backup always had.
+    if entry.kind != "totp":
+        data["kind"] = entry.kind
+    if entry.kind == "hotp":
+        data["counter"] = entry.counter
+    return data
 
 
 def _code_label(entry) -> str:
@@ -187,12 +197,22 @@ def _parse_totp(data, store, uid, index=None) -> TotpEntry:
     except totp.OtpError as e:
         fail(str(e))
     site, issuer, account = _totp_labels(data, fail, "")
+    # The same rules as TotpEntry.from_json and a backup's code records.
+    kind = field("kind", str, "totp")
+    if kind not in ("totp", "hotp", "steam"):
+        fail("the kind must be totp, hotp or steam")
+    counter = field("counter", int, 0)
+    if not 0 <= counter <= totp.MAX_COUNTER:
+        fail(f"the counter must be 0 to {totp.MAX_COUNTER}")
+    if kind != "hotp" and counter:
+        fail(f"a {kind} code has no counter")
     algorithm = field("algorithm", str, totp.DEFAULT_ALGORITHM).upper()
     if algorithm not in totp.ALGORITHMS:
         fail(f"the algorithm must be one of {', '.join(totp.ALGORITHMS)}")
     digits = field("digits", int, totp.DEFAULT_DIGITS)
-    if digits not in totp.DIGITS:
-        fail(f"the digits must be {' or '.join(str(d) for d in totp.DIGITS)}")
+    allowed = (totp.STEAM_DIGITS,) if kind == "steam" else totp.DIGITS
+    if digits not in allowed:
+        fail(f"the digits must be {' or '.join(str(d) for d in allowed)}")
     period = field("period", int, totp.DEFAULT_PERIOD)
     if not totp.MIN_PERIOD <= period <= totp.MAX_PERIOD:
         fail(f"the period must be {totp.MIN_PERIOD} to {totp.MAX_PERIOD} seconds")
@@ -212,7 +232,7 @@ def _parse_totp(data, store, uid, index=None) -> TotpEntry:
     return TotpEntry(
         id=entry_id, sealed_secret=store.seal(uid, b"totp\0" + entry_id, secret),
         site=site, issuer=issuer, account=account,
-        algorithm=algorithm, digits=digits, period=period, created=float(created),
+        algorithm=algorithm, digits=digits, period=period, created=float(created), kind=kind, counter=counter,
     )
 
 
@@ -577,8 +597,8 @@ class ControlServer:
 
     def _totp(self, request, pid, uid, target_uid, username):
         action = request.get("action")
-        if action not in ("status", "list", "unlock", "lock", "code", "add", "update", "delete", "restore",
-                          "purge", "settings"):
+        if action not in ("status", "list", "unlock", "lock", "code", "next", "add", "update", "delete",
+                          "restore", "purge", "settings"):
             raise ControlError(f"unknown authenticator code action {action!r}")
         if "dry_run" in request and not isinstance(request["dry_run"], bool):
             raise ControlError("invalid dry_run flag")
@@ -619,8 +639,8 @@ class ControlServer:
             with self._unlocks_lock:
                 self._unlocks.pop(key, None)
             return {"ok": True}
-        if action == "code":
-            return self._totp_code(request, pid, uid, target_uid, username, require_auth)
+        if action in ("code", "next"):
+            return self._totp_code(request, pid, uid, target_uid, username, require_auth, action == "next")
         if action == "settings":
             value = request.get("require_auth")
             if not isinstance(value, bool):
@@ -712,12 +732,24 @@ class ControlServer:
         self._notify_change(target_uid, purged, uid, "permanently deleted", **CODE_NOTICE)
         return {"ok": True, "purged": [describe_totp(e) for e in purged]}
 
-    def _totp_code(self, request, pid, uid, target_uid, username, require_auth):
+    def _totp_code(self, request, pid, uid, target_uid, username, require_auth, next_only=False):
+        """The current codes; an HOTP code chosen by its ID moves on to its next counter.
+
+        ``next_only`` is the "next" action: exactly one HOTP code, also returned as "code"."""
         if "ask" in request and not isinstance(request["ask"], bool):
             raise ControlError("invalid ask flag")
         if "site" in request:
             raise ControlError("choose codes by ID or all")
-        chosen = self._select(request, self.store.totp_entries(target_uid, username), *CODE_WORDS)
+        entries = self.store.totp_entries(target_uid, username)
+        if request.get("all") is True and not next_only:
+            # Showing every code must not use up HOTP counters: only an explicit ID does.
+            entries = [e for e in entries if e.kind != "hotp"]
+        chosen = self._select(request, entries, *CODE_WORDS)
+        if next_only and len(chosen) != 1:
+            raise ControlError("next shows one authenticator code at a time")
+        if next_only and chosen[0].kind != "hotp":
+            raise ControlError("only an HOTP code has a next code")
+        asked = chosen[0].id.hex()
         key = self._unlock_key(pid, uid)
         unlocked = not require_auth or self._unlocked(pid, uid)
         if not unlocked:
@@ -733,11 +765,29 @@ class ControlServer:
         now = time.time()  # the daemon's clock, never the client's
         codes = []
         for entry in chosen:
-            value, remaining = totp.code(self.store.totp_unseal(target_uid, entry), entry.algorithm,
-                                         entry.digits, entry.period, now)
-            codes.append({"id": entry.id.hex(), "code": value, "remaining": remaining, "period": entry.period})
+            secret = self.store.totp_unseal(target_uid, entry)
+            if entry.kind == "hotp":
+                try:
+                    # Written before the code leaves: a crash loses a counter, never repeats one.
+                    entry, counter = self.store.totp_next(target_uid, username, entry.id)
+                except KeyError:
+                    continue  # trashed meanwhile
+                codes.append({"id": entry.id.hex(), "kind": entry.kind, "counter": counter,
+                              "code": totp.hotp(secret, counter, entry.algorithm, entry.digits)})
+                continue
+            if entry.kind == "steam":  # the same time step as TOTP, in Steam's own alphabet
+                remaining = totp.code(secret, period=entry.period, now=now)[1]
+                value = totp.steam_code(secret, int(now) // entry.period)
+            else:
+                value, remaining = totp.code(secret, entry.algorithm, entry.digits, entry.period, now)
+            codes.append({"id": entry.id.hex(), "kind": entry.kind, "code": value, "remaining": remaining,
+                          "period": entry.period})
         if require_auth and uid != 0 and unlocked:
             self._keep_unlocked(key)
+        if next_only:
+            if not codes:  # trashed during the dialog
+                raise ControlError(f"no authenticator code with ID {asked}")
+            return {"ok": True, "code": codes[0], "codes": codes}
         return {"ok": True, "codes": codes}
 
     def _pin(self, request, pid, uid, target_uid, username):

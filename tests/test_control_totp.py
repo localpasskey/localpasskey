@@ -113,8 +113,9 @@ class TotpControlTests(unittest.TestCase):
                          {"ok": True, "user": self.name, "require_auth": True, "unlocked": False,
                           "count": 0, "trash_count": 0})
         added = self.add()
-        self.assertEqual(set(added), {"id", "site", "issuer", "account", "algorithm", "digits", "period",
-                                      "created", "deleted"})
+        self.assertEqual(set(added), {"id", "kind", "site", "issuer", "account", "algorithm", "digits",
+                                      "period", "created", "deleted"})
+        self.assertEqual(added["kind"], "totp")
         self.polkit.checks.clear()
         listing = self.handle({"action": "list"})
         self.assertEqual(listing["user"], self.name)
@@ -195,7 +196,7 @@ class TotpControlTests(unittest.TestCase):
         now = time.time()
         reply = self.handle({"action": "code", "all": True, "now": 0})
         [code] = reply["codes"]
-        self.assertEqual(set(code), {"id", "code", "remaining", "period"})
+        self.assertEqual(set(code), {"id", "kind", "code", "remaining", "period"})
         self.assertEqual(code["id"], added["id"])
         self.assertEqual(code["period"], 30)
         self.assertIn(code["code"], {totp.code(SECRET, now=now + d)[0] for d in (0, 2)},
@@ -315,6 +316,129 @@ class TotpControlTests(unittest.TestCase):
         self.server._unlocks[live] = now + 60
         self.unlock()
         self.assertEqual(set(self.server._unlocks), {live, self.server._unlock_key(os.getpid(), self.uid)})
+
+    def test_code_leaves_hotp_out_of_all_and_advances_only_an_explicit_id(self):
+        totp_entry = self.add()
+        hotp_entry = self.add(site="bank.example", kind="hotp", counter=7)
+        steam_entry = self.add(site="steamcommunity.com", kind="steam", digits=5)
+        self.assertEqual(hotp_entry["counter"], 7)
+        self.assertNotIn("counter", totp_entry)
+        self.assertEqual(steam_entry["kind"], "steam")
+        self.assertNotIn("counter", steam_entry)
+        self.unlock()
+
+        self.assertEqual({c["id"] for c in self.handle({"action": "code", "all": True})["codes"]},
+                         {totp_entry["id"], steam_entry["id"]})
+        [hotp] = self.handle({"action": "code", "ids": [hotp_entry["id"]]})["codes"]
+        self.assertEqual(hotp["kind"], "hotp")
+        self.assertEqual(set(hotp), {"id", "kind", "counter", "code"})
+        self.assertEqual(hotp["counter"], 7)
+        self.assertEqual(hotp["code"], totp.hotp(SECRET, 7))
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[1].counter, 8)
+
+        [steam] = self.handle({"action": "code", "ids": [steam_entry["id"]]})["codes"]
+        self.assertEqual(len(steam["code"]), 5)
+        self.assertTrue(set(steam["code"]) <= set(totp.STEAM_ALPHABET))
+        self.assertNotIn("counter", steam)
+        self.assertEqual(steam["period"], 30)
+        self.assertIn("remaining", steam)
+
+    def test_next_advances_an_hotp_counter_and_reads_only_one_code(self):
+        hotp_entry = self.add(kind="hotp", counter=3)
+        totp_entry = self.add(site="other.example")
+        self.unlock()
+        self.polkit.checks.clear()
+        reply = self.handle({"action": "next", "ids": [hotp_entry["id"]]})
+        self.assertEqual(reply["code"], reply["codes"][0])
+        self.assertEqual(reply["code"]["counter"], 3)
+        self.assertEqual(reply["code"]["code"], totp.hotp(SECRET, 3))
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].counter, 4)
+        next_one = self.handle({"action": "next", "ids": [hotp_entry["id"]]})["code"]
+        self.assertEqual((next_one["counter"], next_one["code"]), (4, totp.hotp(SECRET, 4)))
+        self.assertEqual(self.polkit.checks, [], "an unlocked process is not asked")
+
+        for request, problem in (({"all": True}, "one authenticator code at a time"),
+                                 ({"ids": [totp_entry["id"]]}, "only an HOTP code"),
+                                 ({"ids": [hotp_entry["id"], totp_entry["id"]]}, "one authenticator code")):
+            with self.subTest(request=request), self.assertRaisesRegex(ControlError, problem):
+                self.handle({"action": "next", **request})
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].counter, 5, "refusals change nothing")
+
+    def test_next_asks_for_the_password_like_code(self):
+        hotp_entry = self.add(kind="hotp", counter=0)
+        self.polkit.verdict = Verdict.DENIED
+        with self.assertRaisesRegex(ControlError, "not shown"):
+            self.handle({"action": "next", "ids": [hotp_entry["id"]], "ask": True})
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].counter, 0)
+        with self.assertRaisesRegex(ControlError, "locked"):
+            self.handle({"action": "next", "ids": [hotp_entry["id"]]})
+        self.polkit.verdict = Verdict.APPROVED
+        self.polkit.checks.clear()
+        self.assertEqual(self.handle({"action": "next", "ids": [hotp_entry["id"]], "ask": True})["code"]["counter"],
+                         0)
+        self.assertEqual(self.polkit.checks, [
+            ("unix-process", ACTION_TOTP, "Show the authenticator code for github.com?")])
+        self.assertEqual(self.server._unlocks, {}, "a one-shot prompt records no unlock")
+
+    def test_a_hotp_entry_trashed_during_the_dialog_yields_no_next_code(self):
+        hotp_entry = self.add(kind="hotp", counter=1)
+
+        def trash_it(subject, action_id, message, cancelled=None, timeout=120.0):
+            self.store.totp_remove(self.uid, self.name, [bytes.fromhex(hotp_entry["id"])])
+            return Verdict.APPROVED
+
+        self.polkit.check = trash_it
+        with self.assertRaisesRegex(ControlError, "no authenticator code with ID"):
+            self.handle({"action": "next", "ids": [hotp_entry["id"]], "ask": True})
+
+    def test_add_validates_kind_and_counter(self):
+        self.unlock()
+        cases = {
+            "kind must be": self.entry(kind="HOTP"),
+            "kind is missing or not a str": self.entry(kind=1),
+            "counter must be 0 to": [self.entry(kind="hotp", counter=-1), self.entry(kind="hotp", counter=2**53)],
+            "counter is missing or not a": self.entry(kind="hotp", counter=True),
+            "a totp code has no counter": self.entry(counter=2),
+            "a steam code has no counter": self.entry(kind="steam", digits=5, counter=1),
+            "digits must be 5": self.entry(kind="steam", digits=6),
+            "digits must be 6 or 8": self.entry(kind="hotp", counter=0, digits=5),
+        }
+        for problem, entry in cases.items():
+            entries = entry if isinstance(entry, list) else [entry]
+            for data in entries:
+                with self.subTest(problem=problem), self.assertRaisesRegex(ControlError, problem):
+                    self.handle({"action": "add", "entry": data})
+        added = self.handle({"action": "add", "entry": self.entry(kind="steam", digits=5)})["added"]
+        self.assertEqual((added["kind"], added["digits"]), ("steam", 5))
+        self.assertEqual(self.store.totp_entries(self.uid, self.name)[0].kind, "steam")
+
+    def test_code_records_carry_kind_and_counter_but_plain_totp_does_not(self):
+        hotp_entry = self.add(kind="hotp", counter=9)
+        totp_entry = self.add(site="other.example")
+        self.unlock()
+        reply = self.raw({"command": "export", "all": True, "codes": True})
+        records = {c["site"]: c for c in reply["codes"]}
+        self.assertEqual((records["github.com"]["kind"], records["github.com"]["counter"]), ("hotp", 9))
+        self.assertNotIn("kind", records["other.example"])
+        self.assertNotIn("counter", records["other.example"])
+        self.assertEqual(records["github.com"]["id"], b64encode(bytes.fromhex(hotp_entry["id"])))
+        self.assertEqual(records["other.example"]["id"], b64encode(bytes.fromhex(totp_entry["id"])))
+
+    def test_import_validates_kind_and_counter(self):
+        cases = {
+            "kind must be totp": {"kind": "md5"},
+            "counter must be 0 to": {"counter": 2**53},
+            "a steam code has no counter": {"kind": "steam", "digits": 5, "counter": 3},
+            "digits must be 5": {"kind": "steam", "digits": 6},
+        }
+        for problem, overrides in cases.items():
+            with self.subTest(problem=problem), self.assertRaisesRegex(ControlError, problem):
+                self.raw({"command": "import", "credentials": [],
+                          "codes": [self.code_record(**overrides)]})
+        reply = self.raw({"command": "import", "credentials": [], "codes": [
+            self.code_record(kind="hotp", counter=4), self.code_record(kind="steam", digits=5)]})
+        self.assertEqual([(c["kind"], c.get("counter")) for c in reply["imported_codes"]],
+                         [("hotp", 4), ("steam", None)], "the counter is the next one to use")
 
     def test_a_lock_during_a_code_request_stays_locked(self):
         self.add()
