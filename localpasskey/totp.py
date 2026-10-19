@@ -27,6 +27,7 @@ DEFAULT_ALGORITHM, DEFAULT_DIGITS, DEFAULT_PERIOD = "SHA1", 6, 30
 MIN_SECRET_BYTES, MAX_SECRET_BYTES = 10, 128  # 80 bits: below RFC 4226's 128, but common in the wild
 MAX_INPUT = 2048  # characters of pasted text
 MAX_LABEL = MAX_LABEL_LENGTH  # site, issuer and account
+STEAM_ALPHABET, STEAM_DIGITS = "23456789BCDFGHJKMNPQRTVWXY", 5
 
 _HASHES = {"SHA1": hashlib.sha1, "SHA256": hashlib.sha256, "SHA512": hashlib.sha512}
 _BASE32 = re.compile(r"[A-Z2-7]*")
@@ -142,12 +143,30 @@ def parse(text: str) -> dict:
     return result
 
 
-def hotp(secret: bytes, counter: int, algorithm: str = "SHA1", digits: int = 6) -> str:
-    """The RFC 4226 one-time password for ``counter``."""
+def _truncate(secret: bytes, counter: int, algorithm: str) -> int:
+    """RFC 4226 dynamic truncation: the 31-bit value both code alphabets start from."""
+    if isinstance(counter, bool) or not isinstance(counter, int) or not 0 <= counter < 2**64:
+        raise OtpError("the counter must be 0 to 2**64-1")
     digest = hmac.new(secret, struct.pack(">Q", counter), _HASHES[algorithm]).digest()
     offset = digest[-1] & 0x0F
-    value = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
-    return str(value % 10**digits).zfill(digits)
+    return struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+
+
+def hotp(secret: bytes, counter: int, algorithm: str = "SHA1", digits: int = 6) -> str:
+    """The RFC 4226 one-time password for ``counter``."""
+    if isinstance(digits, bool) or not isinstance(digits, int) or not 1 <= digits <= 10:
+        raise OtpError("the digits must be 1 to 10")
+    return str(_truncate(secret, counter, algorithm) % 10**digits).zfill(digits)
+
+
+def steam_code(secret: bytes, counter: int) -> str:
+    """The Steam Guard code for ``counter``: five characters of Steam's alphabet."""
+    value = _truncate(secret, counter, "SHA1")
+    chars = []
+    for _ in range(STEAM_DIGITS):
+        value, index = divmod(value, len(STEAM_ALPHABET))
+        chars.append(STEAM_ALPHABET[index])
+    return "".join(chars)
 
 
 def code(

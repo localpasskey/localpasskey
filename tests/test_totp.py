@@ -1,3 +1,4 @@
+import base64
 import unittest
 
 from localpasskey import totp
@@ -42,6 +43,25 @@ class CodeTests(unittest.TestCase):
         self.assertEqual(totp.code(SECRET, period=60, now=61)[1], 59)
         # The last half millisecond still has time left, so no client says "valid for 0 seconds".
         self.assertEqual(totp.code(SECRET, now=29.9996)[1], 0.001)
+
+    def test_hotp_refuses_bad_arguments(self):
+        # struct.pack must never see these: a counter or digits from a file is untrusted.
+        for counter in (-1, 2**64, True, 1.0, "1"):
+            with self.assertRaisesRegex(OtpError, "counter", msg=counter):
+                totp.hotp(SECRET, counter)
+        for digits in (0, 11, True):
+            with self.assertRaisesRegex(OtpError, "digits", msg=digits):
+                totp.hotp(SECRET, 0, digits=digits)
+        self.assertEqual(len(totp.hotp(SECRET, 2**64 - 1, digits=10)), 10)
+
+    def test_steam_code(self):
+        # KeePassXC tests/TestTotp.cpp testSteamTotp
+        secret = totp.decode_secret("63BEDWCQZKTQWPESARIERL5DTTQFCJTK")
+        self.assertEqual(totp.steam_code(secret, 1511200518 // 30), "FR8RV")
+        self.assertEqual(totp.steam_code(secret, 1511200714 // 30), "9P3VP")
+        # steamguard-cli
+        secret = base64.b64decode("zvIayp3JPvtvX/QGHqsqKBk/44s=")
+        self.assertEqual(totp.steam_code(secret, 1616374841 // 30), "2F9J5")
 
     def test_default_now_and_six_digits(self):
         got, remaining = totp.code(SECRET)
