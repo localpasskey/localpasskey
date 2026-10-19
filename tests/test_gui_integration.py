@@ -1102,7 +1102,8 @@ class CodesTabTests(unittest.TestCase):
 
         self.open_codes()
         checks = len(self.server.verifier.checks)
-        for done in ("Imported 2 authenticator codes", "Imported 0 authenticator codes; 2 could not be imported"):
+        for done in ("Imported 2 authenticator codes",
+                     "Nothing to import; 2 authenticator codes could not be imported"):
             self.app.clipboard().setText(link)
             self.answer_dialog(fill)
             self.window.add_code_action.trigger()

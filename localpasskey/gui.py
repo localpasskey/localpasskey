@@ -1750,9 +1750,10 @@ class Window(QMainWindow):
             if error is None and pasted and clipboard.text() == pasted:
                 clipboard.clear()  # the setup key has done its job
             if result and "imported_codes" in result:
-                done = f"Imported {plural_codes(len(result['imported_codes']))}"
+                done = (f"Imported {plural_codes(len(result['imported_codes']))}" if result["imported_codes"]
+                        else "Nothing to import")
                 if result["skipped_codes"]:
-                    done += f"; {len(result['skipped_codes'])} could not be imported"
+                    done += f"; {plural_codes(len(result['skipped_codes']))} could not be imported"
             else:
                 done = "Authenticator code added"
             self._finish(error, done)
