@@ -293,14 +293,19 @@ class CliTotpTests(unittest.TestCase):
         self.assertIn("Nothing to import.", out)
         self.assertEqual(self.checks(), [ACTION_MANAGE])
 
-        # Its own codes have their own websites, and a broken link imports nothing.
-        for text, message in (("otpauth-migration://offline?data=", "this migration link holds no codes"),
-                              (link, "do not apply")):
-            with self.subTest(text=text):
-                code, _, err = self.run_cli("totp", "add", "-y", "--site", "github.com", stdin=text + "\n")
-                self.assertEqual(code, 1)
-                if "do not apply" in message:
-                    self.assertIn(message, err)
+        # Its own codes have their own websites; --site cannot override them.
+        code, _, err = self.run_cli("totp", "add", "-y", "--site", "github.com", stdin=link + "\n")
+        self.assertEqual(code, 1)
+        self.assertIn("--site, --issuer and --account do not apply", err)
+        # A link whose only entries are skipped says why, and imports nothing.
+        md5 = migration_link(migration([otp_parameters(name="Old:me", algorithm=4, type=2)]))
+        code, out, err = self.run_cli("totp", "add", "-y", stdin=md5 + "\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("MD5-based codes are not supported", out)
+        self.assertIn("Nothing to import.", out)
+        code, _, err = self.run_cli("totp", "add", "-y", stdin="otpauth-migration://offline?data=\n")
+        self.assertEqual(code, 1)
+        self.assertIn("this migration link holds no codes", err)
         self.assertEqual(len(self.codes()), 2)
 
     def test_code_rounds_a_fractional_remaining_time_up(self):

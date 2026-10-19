@@ -560,13 +560,15 @@ def _totp_migration(args, tty, text):
             "digits": parsed["digits"], "period": parsed["period"],
             "kind": parsed["kind"], "counter": parsed["counter"],
         })
-    if not records:
-        raise CliError("this migration link holds no codes to import")
-    plan = request({**_payload(args, "import"), "credentials": [], "codes": records, "dry_run": True}, args.socket)
-    imported, imported_codes = plan["imported"], plan.get("imported_codes", [])
     # A skipped entry only has the label from the link; it is shown where the issuer goes.
     skipped_as_records = [{"code": {"id": "", "site": "", "issuer": label, "account": ""}, "reason": reason}
                           for label, reason in skipped]
+    if not records:
+        _print_plan([], [], [], skipped_as_records)
+        print("Nothing to import.")
+        return 0
+    plan = request({**_payload(args, "import"), "credentials": [], "codes": records, "dry_run": True}, args.socket)
+    imported, imported_codes = plan["imported"], plan.get("imported_codes", [])
     _print_plan(imported, imported_codes, plan["skipped"], skipped_as_records + plan.get("skipped_codes", []))
     if not imported_codes:
         print("Nothing to import.")
